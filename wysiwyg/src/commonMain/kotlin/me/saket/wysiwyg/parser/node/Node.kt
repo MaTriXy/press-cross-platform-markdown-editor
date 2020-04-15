@@ -1,6 +1,7 @@
 package me.saket.wysiwyg.parser.node
 
 expect abstract class Node
+expect val Node.parent: Node?
 expect val Node.firstChild: Node?
 expect val Node.nextNode: Node?
 expect val Node.startOffset: Int
@@ -34,7 +35,7 @@ expect val LinkWithTitle.url: CharSequence
  * http://example.com
  */
 expect class Url : DelimitedLinkNode
-expect val Url.url : CharSequence
+expect val Url.url: CharSequence
 
 expect class Strikethrough : Node, DelimitedNode
 
@@ -57,6 +58,8 @@ expect class OrderedList : ListBlock
 expect class BulletList : ListBlock
 
 expect abstract class ListItem : Block
+expect val ListItem.openingMarker: CharSequence
+
 expect class OrderedListItem : ListItem
 expect class BulletListItem : ListItem
 

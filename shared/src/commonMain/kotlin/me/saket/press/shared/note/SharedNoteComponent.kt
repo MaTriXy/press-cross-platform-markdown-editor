@@ -15,12 +15,12 @@ internal object SharedNoteComponent {
     }
     single {
       PrePopulatedNotes(
-          setting = get(),
+          setting = get(named("prepopulated_notes")),
           repository = get(),
           ioScheduler = get(named("io"))
       )
     }
-    factory {
+    factory(named("prepopulated_notes")) {
       customTypeSetting(
           settings = get(),
           key = "prepopulated_notes_inserted",

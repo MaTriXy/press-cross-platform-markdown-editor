@@ -31,8 +31,8 @@ data class MarkdownPalette(
   val blockQuoteTextColor: Int,
   val codeBackgroundColor: Int,
   val headingTextColor: Int,
-  val linkUrlColor: Int,
   val linkTextColor: Int,
+  val linkUrlColor: Int,
   val strikethroughTextColor: Int,
   val syntaxColor: Int,
   val thematicBreakColor: Int
@@ -44,26 +44,26 @@ fun WysiwygStyle.Companion.from(palette: MarkdownPalette, displayUnits: DisplayU
       strikethroughTextColor = palette.strikethroughTextColor,
       blockQuote = BlockQuote(
           leftBorderColor = palette.blockQuoteTextColor,
-          leftBorderWidth = displayUnits.fromPixels(4).roundToInt(),
-          indentationMargin = displayUnits.fromPixels(24).roundToInt(),
+          leftBorderWidth = displayUnits.scaledPixels(4).roundToInt(),
+          indentationMargin = displayUnits.scaledPixels(24).roundToInt(),
           textColor = palette.blockQuoteTextColor
       ),
       code = Code(
           backgroundColor = palette.codeBackgroundColor,
-          codeBlockMargin = displayUnits.fromPixels(8).roundToInt()
+          codeBlockMargin = displayUnits.scaledPixels(8).roundToInt()
       ),
       heading = Heading(
           textColor = palette.headingTextColor
       ),
       link = Link(
-          titleTextColor = palette.linkTextColor,
-          urlTextColor = palette.linkUrlColor
+          textColor = palette.linkTextColor,
+          urlColor = palette.linkUrlColor
       ),
       list = WysiwygStyle.List(
-          indentationMargin = displayUnits.fromPixels(24).roundToInt()
+          indentationMargin = displayUnits.scaledPixels(8).roundToInt()
       ),
       thematicBreak = ThematicBreak(
           color = palette.thematicBreakColor,
-          height = displayUnits.fromPixels(4)
+          height = displayUnits.scaledPixels(4)
       )
   )

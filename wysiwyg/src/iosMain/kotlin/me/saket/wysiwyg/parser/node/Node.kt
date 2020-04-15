@@ -1,6 +1,7 @@
 package me.saket.wysiwyg.parser.node
 
 actual abstract class Node
+actual val Node.parent: Node? get() = TODO()
 actual val Node.firstChild: Node? get() = TODO()
 actual val Node.nextNode: Node? get() = TODO()
 actual val Node.startOffset: Int get() = TODO()
@@ -48,6 +49,8 @@ actual class OrderedList : ListBlock()
 actual class BulletList : ListBlock()
 
 actual abstract class ListItem : Block()
+actual val ListItem.openingMarker: CharSequence get() = TODO()
+
 actual class OrderedListItem : ListItem()
 actual class BulletListItem : ListItem()
 

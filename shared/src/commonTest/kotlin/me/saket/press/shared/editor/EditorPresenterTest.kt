@@ -2,7 +2,6 @@ package me.saket.press.shared.editor
 
 import assertk.assertThat
 import assertk.assertions.hasSize
-import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
 import assertk.assertions.isNotNull
 import com.badoo.reaktive.subject.publish.publishSubject
@@ -17,10 +16,11 @@ import me.saket.press.shared.editor.EditorOpenMode.ExistingNote
 import me.saket.press.shared.editor.EditorOpenMode.NewNote
 import me.saket.press.shared.editor.EditorPresenter.Args
 import me.saket.press.shared.editor.EditorPresenter.Companion.NEW_NOTE_PLACEHOLDER
-import me.saket.press.shared.editor.EditorUiEffect.PopulateContent
+import me.saket.press.shared.editor.EditorUiEffect.UpdateNoteText
 import me.saket.press.shared.fakedata.fakeNote
 import me.saket.press.shared.localization.Strings
 import me.saket.press.shared.note.FakeNoteRepository
+import me.saket.wysiwyg.formatting.TextSelection
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -59,7 +59,7 @@ class EditorPresenterTest {
 
     repository.savedNotes.single().let {
       assertThat(it.uuid).isEqualTo(noteUuid)
-      assertThat(it.content).isEmpty()
+      assertThat(it.content).isEqualTo(NEW_NOTE_PLACEHOLDER)
     }
     observer.assertNotError()
   }
@@ -133,16 +133,6 @@ class EditorPresenterTest {
     assertThat(deletedNote.deletedAtString).isNotNull()
   }
 
-  @Test fun `show new note placeholder on start`() {
-    presenter(NewNote(noteUuid))
-        .uiEffects(events)
-        .test()
-        .apply {
-          assertEquals(values[0], PopulateContent(NEW_NOTE_PLACEHOLDER, moveCursorToEnd = true))
-        }
-        .assertNotError()
-  }
-
   @Test fun `show hint text until the text is changed`() {
     val uiModels = presenter(NewNote(noteUuid))
         .uiModels(events)
@@ -165,7 +155,7 @@ class EditorPresenterTest {
     uiModels.assertNotError()
   }
 
-  @Test fun `populate note content on start`() {
+  @Test fun `populate existing note's content on start`() {
     repository.savedNotes += fakeNote(
         uuid = noteUuid,
         content = "Nicolas Cage favorite dialogues"
@@ -175,7 +165,22 @@ class EditorPresenterTest {
         .uiEffects(events)
         .test()
         .apply {
-          assertValue(PopulateContent("Nicolas Cage favorite dialogues", moveCursorToEnd = false))
+          assertValue(UpdateNoteText("Nicolas Cage favorite dialogues", newSelection = null))
+          assertNotError()
+        }
+  }
+
+  @Test fun `populate new note's content on start`() {
+    presenter(NewNote(noteUuid))
+        .uiEffects(events)
+        .test()
+        .apply {
+          assertValue(
+              UpdateNoteText(
+                  newText = NEW_NOTE_PLACEHOLDER,
+                  newSelection = TextSelection.cursor(NEW_NOTE_PLACEHOLDER.length)
+              )
+          )
           assertNotError()
         }
   }

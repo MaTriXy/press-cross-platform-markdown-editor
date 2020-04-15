@@ -7,21 +7,16 @@ CREATE TABLE note (
   content TEXT NOT NULL,
   createdAt TEXT AS DateTime NOT NULL,
   updatedAt TEXT AS DateTime NOT NULL,
+  archivedAtString TEXT AS String,
   deletedAtString TEXT AS String
 );
 
 CREATE INDEX note_content ON note(content);
 
-nonDeletedNotes:
+notes:
 SELECT *
 FROM note
-WHERE deletedAtString IS NULL
-ORDER BY updatedAt DESC;
-
-nonDeletedAndNonEmptyNotes:
-SELECT *
-FROM note
-WHERE deletedAtString IS NULL AND content != ""
+WHERE deletedAtString IS NULL AND archivedAtString IS NULL
 ORDER BY updatedAt DESC;
 
 note:
@@ -31,7 +26,7 @@ WHERE uuid = ?;
 
 insert:
 INSERT INTO note
-VALUES (?,?,?,?,?,?);
+VALUES (?,?,?,?,?,?,?);
 
 updateContent:
 UPDATE note
@@ -41,6 +36,11 @@ WHERE uuid = ?;
 markAsDeleted:
 UPDATE note
 SET deletedAtString = ?
+WHERE uuid = ?;
+
+markAsArchived:
+UPDATE note
+SET archivedAtString = ?
 WHERE uuid = ?;
 
 -- Test functions

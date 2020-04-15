@@ -1,11 +1,10 @@
-@file:Suppress("unused")
-
 package press.editor
 
 import android.content.Context
-import android.graphics.Color
+import android.graphics.Color.TRANSPARENT
 import android.graphics.Color.WHITE
 import android.text.InputType.TYPE_CLASS_TEXT
+import android.text.InputType.TYPE_TEXT_FLAG_AUTO_CORRECT
 import android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
 import android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE
 import android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
@@ -15,7 +14,6 @@ import android.view.Gravity.TOP
 import android.view.View
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
-import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.EditorInfo.IME_FLAG_NO_FULLSCREEN
 import android.widget.EditText
 import android.widget.ScrollView
@@ -39,7 +37,7 @@ import me.saket.press.shared.editor.EditorPresenter
 import me.saket.press.shared.editor.EditorPresenter.Args
 import me.saket.press.shared.editor.EditorUiEffect
 import me.saket.press.shared.editor.EditorUiEffect.CloseNote
-import me.saket.press.shared.editor.EditorUiEffect.PopulateContent
+import me.saket.press.shared.editor.EditorUiEffect.UpdateNoteText
 import me.saket.press.shared.editor.EditorUiModel
 import me.saket.press.shared.subscribe
 import me.saket.press.shared.theme.DisplayUnits
@@ -48,6 +46,7 @@ import me.saket.press.shared.theme.applyStyle
 import me.saket.press.shared.theme.from
 import me.saket.press.shared.uiUpdates
 import me.saket.wysiwyg.Wysiwyg
+import me.saket.wysiwyg.formatting.TextSelection
 import me.saket.wysiwyg.parser.node.HeadingLevel.H1
 import me.saket.wysiwyg.style.WysiwygStyle
 import me.saket.wysiwyg.widgets.addTextChangedListener
@@ -57,15 +56,18 @@ import press.theme.themed
 import press.util.exhaustive
 import press.widgets.Truss
 import press.widgets.fromOreo
-import press.widgets.setText
 import press.widgets.textColor
 import press.widgets.textSizePx
+import me.saket.press.R
+import me.saket.press.shared.editor.AutoCorrectEnabled
+import me.saket.press.shared.settings.Setting
 
 class EditorView @AssistedInject constructor(
   @Assisted context: Context,
   @Assisted openMode: EditorOpenMode,
   @Assisted private val onDismiss: () -> Unit,
-  presenterFactory: EditorPresenter.Factory
+  presenterFactory: EditorPresenter.Factory,
+  autoCorrectEnabled: Setting<AutoCorrectEnabled>
 ) : ContourLayout(context) {
 
   private val toolbar = themed(Toolbar(context)).apply {
@@ -80,6 +82,7 @@ class EditorView @AssistedInject constructor(
   }
 
   internal val scrollView = themed(ScrollView(context)).apply {
+    id = R.id.editor_scrollable_container
     isFillViewport = true
     applyLayout(
         x = leftTo { parent.left() }.rightTo { parent.right() },
@@ -87,8 +90,9 @@ class EditorView @AssistedInject constructor(
     )
   }
 
-  internal val editorEditText = themed(EditText(context)).apply {
+  internal val editorEditText = themed(PlainTextPasteEditText(context)).apply {
     EditorUiStyles.editor.applyStyle(this)
+    id = R.id.editor_textfield
     background = null
     breakStrategy = BREAK_STRATEGY_HIGH_QUALITY
     gravity = TOP
@@ -96,10 +100,14 @@ class EditorView @AssistedInject constructor(
         TYPE_TEXT_FLAG_CAP_SENTENCES or
         TYPE_TEXT_FLAG_MULTI_LINE or
         TYPE_TEXT_FLAG_NO_SUGGESTIONS
+    if (autoCorrectEnabled.get().enabled) {
+      inputType = inputType or TYPE_TEXT_FLAG_AUTO_CORRECT
+    }
     imeOptions = IME_FLAG_NO_FULLSCREEN
     movementMethod = EditorLinkMovementMethod(scrollView)
-    updatePaddingRelative(start = 16.dip, end = 16.dip, bottom = 16.dip)
+    filters += FormatMarkdownOnEnterPress(this)
     CapitalizeOnHeadingStart.capitalize(this)
+    updatePaddingRelative(start = 16.dip, end = 16.dip, bottom = 16.dip)
     fromOreo {
       importantForAutofill = IMPORTANT_FOR_AUTOFILL_NO
     }
@@ -174,7 +182,7 @@ class EditorView @AssistedInject constructor(
       headingHintTextView.visibility = View.VISIBLE
       headingHintTextView.text = Truss()
           .pushSpan(EditorHeadingHintSpan(H1))
-          .pushSpan(ForegroundColorSpan(Color.TRANSPARENT))
+          .pushSpan(ForegroundColorSpan(TRANSPARENT))
           .append("# ")
           .popSpan()
           .append(model.hintText ?: "")
@@ -185,9 +193,16 @@ class EditorView @AssistedInject constructor(
 
   private fun render(uiUpdate: EditorUiEffect) {
     when (uiUpdate) {
-      is PopulateContent -> editorEditText.setText(uiUpdate.content, moveCursorToEnd = uiUpdate.moveCursorToEnd)
+      is UpdateNoteText -> editorEditText.setText(uiUpdate.newText, uiUpdate.newSelection)
       is CloseNote -> onDismiss()
     }.exhaustive
+  }
+
+  private fun EditText.setText(newText: CharSequence, newSelection: TextSelection?) {
+    setText(newText)
+    newSelection?.let {
+      setSelection(it.start, it.end)
+    }
   }
 
   @AssistedInject.Factory
