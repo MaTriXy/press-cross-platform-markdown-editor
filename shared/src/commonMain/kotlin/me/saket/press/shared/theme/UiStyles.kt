@@ -1,54 +1,39 @@
 package me.saket.press.shared.theme
 
-import me.saket.press.shared.theme.UiStyles.FontFamily.WORK_SANS
-import me.saket.press.shared.theme.UiStyles.FontVariant.BOLD
-import me.saket.press.shared.theme.UiStyles.FontVariant.REGULAR
-import me.saket.press.shared.theme.UiStyles.Text
-
-object HomeUiStyles {
-  object NoteRow {
-    val title = Text(
-        font = WORK_SANS * BOLD,
-        textSize = 16f,
-        maxLines = 1
-    )
-    val body = Text(
-        textSize = 15f,
-        maxLines = 2
-    )
-  }
-}
-
-object EditorUiStyles {
-  val editor = Text(
-      textSize = 16f,
-      lineSpacingMultiplier = 1.25f
-  )
-}
+import me.saket.press.shared.theme.UiStyles.FontFamily.Regular
+import me.saket.press.shared.theme.UiStyles.FontVariant.Normal
+import me.saket.press.shared.theme.UiStyles.Typeface.WorkSans
 
 object UiStyles {
-
   data class Text(
-    val font: Font = WORK_SANS * REGULAR,
+    val font: Font = Font(WorkSans, Regular, Normal),
     val textSize: Float,
     val lineSpacingMultiplier: Float = 1.0f,
     val maxLines: Int? = null
   )
 
   data class Font(
+    val typeface: Typeface = WorkSans,
     val family: FontFamily,
     val variant: FontVariant
   )
 
-  enum class FontFamily {
-    WORK_SANS;
+  // Note to self:
+  //  Roboto is a typeface.
+  //  Roboto Mono is a font family.
+  //  Roboto Mono Italic is a font.
+  enum class Typeface(val displayName: String) {
+    WorkSans("Work Sans"),
+    System("System")
+  }
 
-    operator fun times(variant: FontVariant) = Font(this, variant)
+  enum class FontFamily {
+    Regular
   }
 
   enum class FontVariant(val weight: Int, val isItalic: Boolean) {
-    REGULAR(weight = 400, isItalic = false),
-    ITALIC(weight = 400, isItalic = true),
-    BOLD(weight = 700, isItalic = false)
+    Normal(weight = 400, isItalic = false),
+    Italic(weight = 400, isItalic = true),
+    Bold(weight = 700, isItalic = false)
   }
 }

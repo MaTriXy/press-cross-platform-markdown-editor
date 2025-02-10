@@ -1,216 +1,325 @@
 package press.editor
 
 import android.content.Context
-import android.graphics.Color.TRANSPARENT
-import android.graphics.Color.WHITE
-import android.text.InputType.TYPE_CLASS_TEXT
+import android.content.res.ColorStateList
 import android.text.InputType.TYPE_TEXT_FLAG_AUTO_CORRECT
-import android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
-import android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE
-import android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
-import android.text.Layout.BREAK_STRATEGY_HIGH_QUALITY
-import android.text.style.ForegroundColorSpan
-import android.view.Gravity.TOP
-import android.view.View
+import android.util.AttributeSet
+import android.view.Menu
+import android.view.MenuItem.SHOW_AS_ACTION_IF_ROOM
+import android.view.MenuItem.SHOW_AS_ACTION_NEVER
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
-import android.view.inputmethod.EditorInfo.IME_FLAG_NO_FULLSCREEN
 import android.widget.EditText
-import android.widget.ScrollView
-import android.widget.TextView
-import androidx.appcompat.content.res.AppCompatResources.getDrawable
-import androidx.appcompat.widget.Toolbar
-import androidx.core.graphics.ColorUtils.blendARGB
+import android.widget.Toast
+import android.widget.Toast.LENGTH_SHORT
+import androidx.core.text.buildSpannedString
+import androidx.core.text.color
+import androidx.core.text.inSpans
+import androidx.core.view.ViewCompat
 import androidx.core.view.updatePaddingRelative
+import app.cash.exhaustive.Exhaustive
 import com.jakewharton.rxbinding3.view.detaches
-import com.jakewharton.rxbinding3.widget.textChanges
 import com.squareup.contour.ContourLayout
 import com.squareup.inject.assisted.Assisted
-import com.squareup.inject.assisted.AssistedInject
+import com.squareup.inject.inflation.InflationInject
 import io.reactivex.Observable
 import io.reactivex.android.schedulers.AndroidSchedulers.mainThread
-import me.saket.press.R.drawable
-import me.saket.press.shared.editor.EditorEvent
+import io.reactivex.annotations.CheckReturnValue
+import io.reactivex.disposables.Disposable
+import io.reactivex.rxkotlin.Observables
+import io.reactivex.schedulers.Schedulers
+import me.saket.cascade.CascadeBackNavigator
+import me.saket.cascade.CascadePopupMenu
+import me.saket.cascade.overrideAllPopupMenus
+import me.saket.press.R
+import me.saket.press.shared.editor.EditorEffect
+import me.saket.press.shared.editor.EditorEffect.BlockedDueToSyncConflict
+import me.saket.press.shared.editor.EditorEffect.PopulateNoteBody
+import me.saket.press.shared.editor.EditorEffect.ShowToast
+import me.saket.press.shared.editor.EditorEvent.CloseSubMenu
 import me.saket.press.shared.editor.EditorEvent.NoteTextChanged
-import me.saket.press.shared.editor.EditorOpenMode
+import me.saket.press.shared.editor.EditorModel
+import me.saket.press.shared.editor.EditorOpenMode.NewNote
 import me.saket.press.shared.editor.EditorPresenter
 import me.saket.press.shared.editor.EditorPresenter.Args
-import me.saket.press.shared.editor.EditorUiEffect
-import me.saket.press.shared.editor.EditorUiEffect.CloseNote
-import me.saket.press.shared.editor.EditorUiEffect.UpdateNoteText
-import me.saket.press.shared.editor.EditorUiModel
-import me.saket.press.shared.subscribe
+import me.saket.press.shared.editor.EditorScreenKey
+import me.saket.press.shared.editor.ToolbarIconKind.Archive
+import me.saket.press.shared.editor.ToolbarIconKind.CopyAs
+import me.saket.press.shared.editor.ToolbarIconKind.DeleteNote
+import me.saket.press.shared.editor.ToolbarIconKind.DuplicateNote
+import me.saket.press.shared.editor.ToolbarIconKind.OpenInSplitScreen
+import me.saket.press.shared.editor.ToolbarIconKind.ShareAs
+import me.saket.press.shared.editor.ToolbarIconKind.Unarchive
+import me.saket.press.shared.editor.ToolbarMenuAction
+import me.saket.press.shared.editor.ToolbarMenuItem
+import me.saket.press.shared.editor.ToolbarSubMenu
+import me.saket.press.shared.listenRx
+import me.saket.press.shared.preferences.UserPreferences
+import me.saket.press.shared.saveEditorContentOnClose
+import me.saket.press.shared.theme.AppTheme
 import me.saket.press.shared.theme.DisplayUnits
-import me.saket.press.shared.theme.EditorUiStyles
+import me.saket.press.shared.theme.TextStyles.mainBody
+import me.saket.press.shared.theme.TextView
 import me.saket.press.shared.theme.applyStyle
-import me.saket.press.shared.theme.from
-import me.saket.press.shared.uiUpdates
+import me.saket.press.shared.theme.palettes.ThemePalette
+import me.saket.press.shared.theme.palettes.wysiwygStyle
+import me.saket.press.shared.ui.models
 import me.saket.wysiwyg.Wysiwyg
 import me.saket.wysiwyg.formatting.TextSelection
 import me.saket.wysiwyg.parser.node.HeadingLevel.H1
-import me.saket.wysiwyg.style.WysiwygStyle
 import me.saket.wysiwyg.widgets.addTextChangedListener
-import press.theme.themeAware
+import press.editor.format.EditorFormattingToolbar
+import press.extensions.doOnEveryLayout
+import press.extensions.doOnTextChange
+import press.extensions.getDrawable
+import press.extensions.showKeyboard
+import press.extensions.textColor
+import press.extensions.textSizePx
+import press.extensions.unsafeLazy
+import press.navigation.BackPressInterceptor
+import press.navigation.BackPressInterceptor.InterceptResult
+import press.navigation.BackPressInterceptor.InterceptResult.Ignored
+import press.navigation.navigator
+import press.navigation.screenKey
+import press.theme.pressCascadeStyler
 import press.theme.themePalette
-import press.theme.themed
-import press.util.exhaustive
-import press.widgets.Truss
-import press.widgets.fromOreo
-import press.widgets.textColor
-import press.widgets.textSizePx
-import me.saket.press.R
-import me.saket.press.shared.editor.AutoCorrectEnabled
-import me.saket.press.shared.settings.Setting
+import press.widgets.PressToolbar
 
-class EditorView @AssistedInject constructor(
+class EditorView @InflationInject constructor(
   @Assisted context: Context,
-  @Assisted openMode: EditorOpenMode,
-  @Assisted private val onDismiss: () -> Unit,
+  @Assisted attrs: AttributeSet? = null,
   presenterFactory: EditorPresenter.Factory,
-  autoCorrectEnabled: Setting<AutoCorrectEnabled>
-) : ContourLayout(context) {
+  preferences: UserPreferences,
+  private val appTheme: AppTheme
+) : ContourLayout(context), BackPressInterceptor {
 
-  private val toolbar = themed(Toolbar(context)).apply {
-    navigationIcon = getDrawable(context, drawable.ic_close_24dp)
-    themeAware {
-      setBackgroundColor(it.window.editorBackgroundColor)
-    }
-    applyLayout(
-        x = leftTo { parent.left() }.rightTo { parent.right() },
-        y = topTo { parent.top() }
-    )
+  private val toolbar = PressToolbar(context).apply {
+    setBackgroundColor(themePalette().window.elevatedBackgroundColor)
   }
 
-  internal val scrollView = themed(ScrollView(context)).apply {
+  private val scrollView = EditorScrollView(context).apply {
     id = R.id.editor_scrollable_container
     isFillViewport = true
-    applyLayout(
-        x = leftTo { parent.left() }.rightTo { parent.right() },
-        y = topTo { toolbar.bottom() }.bottomTo { parent.bottom() }
-    )
   }
 
-  internal val editorEditText = themed(PlainTextPasteEditText(context)).apply {
-    EditorUiStyles.editor.applyStyle(this)
+  private val editorEditText = MarkdownEditText(context).apply {
+    applyStyle(mainBody)
     id = R.id.editor_textfield
-    background = null
-    breakStrategy = BREAK_STRATEGY_HIGH_QUALITY
-    gravity = TOP
-    inputType = TYPE_CLASS_TEXT or  // Multiline doesn't work without this.
-        TYPE_TEXT_FLAG_CAP_SENTENCES or
-        TYPE_TEXT_FLAG_MULTI_LINE or
-        TYPE_TEXT_FLAG_NO_SUGGESTIONS
-    if (autoCorrectEnabled.get().enabled) {
+    textColor = themePalette().textColorPrimary
+    if (preferences.autoCorrectEnabled.get()!!.enabled) {
       inputType = inputType or TYPE_TEXT_FLAG_AUTO_CORRECT
     }
-    imeOptions = IME_FLAG_NO_FULLSCREEN
     movementMethod = EditorLinkMovementMethod(scrollView)
-    filters += FormatMarkdownOnEnterPress(this)
-    CapitalizeOnHeadingStart.capitalize(this)
-    updatePaddingRelative(start = 16.dip, end = 16.dip, bottom = 16.dip)
-    fromOreo {
-      importantForAutofill = IMPORTANT_FOR_AUTOFILL_NO
-    }
-    themeAware {
-      textColor = it.textColorPrimary
-    }
+    updatePaddingRelative(start = 20.dip, end = 20.dip, bottom = 52.dip)
   }
 
-  private val headingHintTextView = themed(TextView(context)).apply {
+  private val headingHintTextView = TextView(context, mainBody).apply {
     textSizePx = editorEditText.textSize
-    themeAware {
-      textColor = blendARGB(it.window.backgroundColor, WHITE, 0.50f)
-    }
-    applyLayout(
-        x = leftTo { scrollView.left() + editorEditText.paddingStart }
-            .rightTo { scrollView.right() - editorEditText.paddingStart },
-        y = topTo { scrollView.top() + editorEditText.paddingTop }
+    textColor = themePalette().textColorHint
+  }
+
+  private val formattingToolbar = EditorFormattingToolbar(editorEditText)
+
+  private val presenter by unsafeLazy {
+    presenterFactory.create(
+      Args(
+        openMode = screenKey<EditorScreenKey>().openMode,
+        deleteBlankNewNoteOnExit = true,
+        navigator = navigator(),
+        onEffect = ::render
+      )
     )
   }
 
-  private val presenter = presenterFactory.create(Args(openMode))
-
   init {
+    id = R.id.editor_view
+    setBackgroundColor(themePalette().window.elevatedBackgroundColor)
+
+    toolbar.layoutBy(
+      x = matchParentX(),
+      y = topTo { parent.top() }
+    )
+    headingHintTextView.layoutBy(
+      x = leftTo { scrollView.left() + editorEditText.paddingStart }
+        .rightTo { scrollView.right() - editorEditText.paddingStart },
+      y = topTo { scrollView.top() + editorEditText.paddingTop }
+    )
+    scrollView.layoutBy(
+      x = matchParentX(),
+      y = topTo { toolbar.bottom() }.bottomTo { formattingToolbar.top() }
+    )
+    formattingToolbar.layoutBy(
+      x = matchParentX(),
+      y = bottomTo { parent.bottom() }
+    )
+
     scrollView.addView(editorEditText, MATCH_PARENT, WRAP_CONTENT)
-    bringChildToFront(scrollView)
-
-    themeAware { palette ->
-      setBackgroundColor(palette.window.editorBackgroundColor)
+    formattingToolbar.doOnEveryLayout {
+      scrollView.setFadingEdgeLength(formattingToolbar.height * 3 / 4)
     }
+    ViewCompat.setWindowInsetsAnimationCallback(
+      scrollView,
+      KeepCursorVisibleOnKeyboardShow(scrollView, editorEditText)
+    )
 
-    // TODO: add support for changing WysiwygStyle.
-    themePalette()
-        .take(1)
-        .takeUntil(detaches())
-        .subscribe { palette ->
-          val wysiwygStyle = WysiwygStyle.from(palette.markdown, DisplayUnits(context))
-          val wysiwyg = Wysiwyg(editorEditText, wysiwygStyle)
-          editorEditText.addTextChangedListener(wysiwyg.syntaxHighlighter())
-        }
+    val wysiwygStyle = themePalette().wysiwygStyle(DisplayUnits(context))
+    val wysiwyg = Wysiwyg(editorEditText, wysiwygStyle)
+    editorEditText.addTextChangedListener(wysiwyg.syntaxHighlighter())
 
-    toolbar.setNavigationOnClickListener {
-      // TODO: detect if the keyboard is up and delay going back by
-      //  a bit so that the IRV behind is resized before this View
-      //  start collapsing.
-      onDismiss()
+    if (screenKey<EditorScreenKey>().openMode is NewNote) {
+      editorEditText.post {
+        editorEditText.showKeyboard()
+      }
     }
   }
 
   override fun onAttachedToWindow() {
     super.onAttachedToWindow()
 
-    val noteTextChanges: Observable<EditorEvent> = editorEditText
-        .textChanges()
-        .map { NoteTextChanged(it.toString()) }
+    editorEditText.doOnTextChange {
+      presenter.dispatch(NoteTextChanged(it.toString()))
+    }
 
-    Observable.mergeArray(noteTextChanges)
-        .uiUpdates(presenter)
-        .takeUntil(detaches())
-        .observeOn(mainThread())
-        .subscribe(models = ::render, effects = ::render)
+    presenter.models()
+      .observeOn(mainThread())
+      .publishAndConnect { models ->
+        models
+          .takeUntil(detaches())
+          .subscribe(::render)
+
+        models.map { it.toolbarMenu }
+          .distinctUntilChanged()
+          .let { Observables.combineLatest(it, appTheme.listenRx()) }
+          .takeUntil(detaches())
+          .subscribe { (menu, palette) ->
+            renderToolbarMenu(menu, palette)
+          }
+      }
   }
 
-  override fun onDetachedFromWindow() {
-    super.onDetachedFromWindow()
-    presenter.saveEditorContentOnExit(editorEditText.text)
+  @CheckReturnValue
+  fun <T> Observable<T>.publishAndConnect(func: (Observable<T>) -> Unit): Disposable {
+    return publish().also { func.invoke(it) }.connect()
   }
 
-  private fun render(model: EditorUiModel) {
+  override fun onInterceptBackPress(): InterceptResult {
+    // The content must only be saved when this screen is closed by the user.
+    // Press previously saved content in onDetachedFromWindow(), but that caused
+    // the note to get deleted if the note was empty even if the Activity was
+    // being recreated, say, due to a theme change.
+    presenter.saveEditorContentOnClose(editorEditText.text.toString())
+      .subscribeOn(Schedulers.io())
+      .subscribe()
+    return Ignored
+  }
+
+  private fun render(model: EditorModel) {
     if (model.hintText == null) {
       headingHintTextView.visibility = GONE
     } else {
-      headingHintTextView.visibility = View.VISIBLE
-      headingHintTextView.text = Truss()
-          .pushSpan(EditorHeadingHintSpan(H1))
-          .pushSpan(ForegroundColorSpan(TRANSPARENT))
-          .append("# ")
-          .popSpan()
-          .append(model.hintText ?: "")
-          .popSpan()
-          .build()
+      headingHintTextView.visibility = VISIBLE
+      headingHintTextView.text = buildSpannedString {
+        inSpans(EditorHeadingHintSpan(H1)) {
+          append(model.hintText!!)
+        }
+      }
     }
   }
 
-  private fun render(uiUpdate: EditorUiEffect) {
-    when (uiUpdate) {
-      is UpdateNoteText -> editorEditText.setText(uiUpdate.newText, uiUpdate.newSelection)
-      is CloseNote -> onDismiss()
-    }.exhaustive
-  }
-
-  private fun EditText.setText(newText: CharSequence, newSelection: TextSelection?) {
-    setText(newText)
-    newSelection?.let {
-      setSelection(it.start, it.end)
+  private fun render(effect: EditorEffect) {
+    mainThread().scheduleDirect {
+      @Exhaustive
+      when (effect) {
+        is PopulateNoteBody -> editorEditText.setText(effect.newText, effect.newSelection)
+        is BlockedDueToSyncConflict -> EditingBlockedDueToConflictDialog.show(context, onDismiss = navigator()::goBack)
+        is ShowToast -> Toast.makeText(context, effect.message, LENGTH_SHORT).show()
+      }
     }
   }
 
-  @AssistedInject.Factory
-  interface Factory {
-    fun create(
-      context: Context,
-      openMode: EditorOpenMode,
-      onDismiss: () -> Unit
-    ): EditorView
+  private fun renderToolbarMenu(
+    items: List<ToolbarMenuItem>,
+    palette: ThemePalette
+  ) {
+    toolbar.overflowIcon!!.setTint(palette.accentColor)
+
+    val backNavigator = CascadeBackNavigator()
+    toolbar.menu.clear()
+    for (item in items) {
+      item.addToMenu(toolbar.menu, palette, backNavigator)
+    }
+
+    toolbar.overrideAllPopupMenus { context, anchor ->
+      CascadePopupMenu(
+        context = context,
+        anchor = anchor,
+        styler = pressCascadeStyler(),
+        backNavigator = backNavigator
+      )
+    }
+  }
+
+  private fun ToolbarMenuItem.addToMenu(
+    menu: Menu,
+    palette: ThemePalette,
+    backNavigator: CascadeBackNavigator
+  ) {
+    val item: ToolbarMenuItem = this
+    val iconRes = when (item.icon) {
+      Archive -> R.drawable.ic_twotone_archive_24
+      Unarchive -> R.drawable.ic_twotone_unarchive_24
+      ShareAs -> R.drawable.ic_twotone_share_24
+      CopyAs -> R.drawable.ic_twotone_file_copy_24
+      DuplicateNote -> R.drawable.ic_twotone_note_add_24
+      OpenInSplitScreen -> R.drawable.ic_twotone_vertical_split_24
+      DeleteNote -> R.drawable.ic_twotone_delete_24
+      null -> null
+    }
+    val icon = iconRes?.let { context.getDrawable(iconRes, palette.accentColor) }
+
+    val menuItem = when (item) {
+      is ToolbarMenuAction -> {
+        menu.add(item.coloredLabel(palette)).setOnMenuItemClickListener {
+          when (item.clickEvent) {
+            is CloseSubMenu -> backNavigator.navigateBack()
+            else -> presenter.dispatch(item.clickEvent)
+          }
+          true
+        }
+      }
+      is ToolbarSubMenu -> {
+        menu.addSubMenu(item.label)
+          .setHeaderTitle(item.subMenuTitle)
+          .also { subMenu ->
+            item.children.forEach { it.addToMenu(subMenu, palette, backNavigator) }
+          }
+          .item
+      }
+    }
+
+    menuItem.also {
+      it.icon = icon
+      it.iconTintList = ColorStateList.valueOf(palette.accentColor)
+      it.setShowAsAction(if (menu.size() <= 2) SHOW_AS_ACTION_IF_ROOM else SHOW_AS_ACTION_NEVER)
+    }
+  }
+}
+
+private fun ToolbarMenuAction.coloredLabel(palette: ThemePalette): CharSequence {
+  return if (isDangerousAction) {
+    buildSpannedString {
+      color(palette.textColorWarning) {
+        append(label)
+      }
+    }
+  } else {
+    label
+  }
+}
+
+private fun EditText.setText(newText: CharSequence, newSelection: TextSelection?) {
+  setText(newText)
+  newSelection?.let {
+    setSelection(it.start, it.end)
   }
 }

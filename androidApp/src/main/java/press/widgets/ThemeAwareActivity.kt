@@ -1,49 +1,39 @@
 package press.widgets
 
 import android.app.ActivityManager.TaskDescription
-import android.content.Context
 import android.graphics.drawable.ColorDrawable
 import android.os.Build.VERSION.SDK_INT
 import android.os.Bundle
-import android.view.WindowManager.LayoutParams
+import android.view.WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.content.res.AppCompatResources.getDrawable
 import androidx.core.graphics.drawable.toBitmap
-import press.theme.TintedCursorDrawableInterceptor
-import press.theme.themeAware
+import androidx.core.view.WindowCompat
+import com.jakewharton.rxbinding3.view.detaches
 import me.saket.press.R
-import me.saket.resourceinterceptor.ContextResourceWrapper
-import me.saket.resourceinterceptor.InterceptibleResources
+import me.saket.press.shared.listenRx
+import me.saket.press.shared.theme.palettes.ThemePalette
+import press.theme.AutoThemer
+import press.theme.appTheme
 
 abstract class ThemeAwareActivity : AppCompatActivity() {
-
   override fun onCreate(savedInstanceState: Bundle?) {
     applyPaletteTheme()
     super.onCreate(savedInstanceState)
-  }
-
-  override fun attachBaseContext(newBase: Context) {
-    super.attachBaseContext(
-        ContextResourceWrapper(newBase, InterceptibleResources(newBase.resources))
-    )
+    AutoThemer.theme(this)
   }
 
   @Suppress("DEPRECATION")
   private fun applyPaletteTheme() {
-    val resources = resources as InterceptibleResources
-
-    // EditText cursor.
-    resources.setInterceptor(
-        resId = R.drawable.tinted_cursor_drawable,
-        interceptor = TintedCursorDrawableInterceptor(this)
-    )
-
     themeAware { palette ->
       // Window chrome.
       window.apply {
         setBackgroundDrawable(ColorDrawable(palette.window.backgroundColor))
-        addFlags(LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS)
+        addFlags(FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS)
         statusBarColor = palette.primaryColorDark
+
+        val insetsController = WindowCompat.getInsetsController(this, decorView)!!
+        insetsController.isAppearanceLightStatusBars = palette.isLightTheme
       }
 
       // For recent apps.
@@ -55,5 +45,12 @@ abstract class ThemeAwareActivity : AppCompatActivity() {
       }
       setTaskDescription(taskDescription)
     }
+  }
+
+  protected fun themeAware(skipInitial: Boolean = false, onThemeChange: (ThemePalette) -> Unit) {
+    appTheme().listenRx()
+      .skip(if (skipInitial) 1 else 0)
+      .takeUntil(window.decorView.detaches())
+      .subscribe(onThemeChange)
   }
 }

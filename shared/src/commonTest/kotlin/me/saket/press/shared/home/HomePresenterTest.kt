@@ -1,96 +1,260 @@
 package me.saket.press.shared.home
 
 import assertk.assertThat
-import assertk.assertions.containsOnly
-import com.badoo.reaktive.subject.publish.publishSubject
-import com.badoo.reaktive.test.observable.assertValue
+import assertk.assertions.isEmpty
+import assertk.assertions.isEqualTo
+import com.badoo.reaktive.observable.map
 import com.badoo.reaktive.test.observable.test
-import com.benasher44.uuid.uuid4
-import me.saket.press.shared.editor.EditorPresenter.Companion.NEW_NOTE_PLACEHOLDER
-import me.saket.press.shared.fakedata.fakeNote
+import me.saket.press.shared.FakeSchedulers
+import me.saket.press.shared.containsOnly
+import me.saket.press.shared.db.BaseDatabaeTest
+import me.saket.press.shared.db.FolderId
+import me.saket.press.shared.db.NoteId
+import me.saket.press.shared.editor.EditorOpenMode.NewNote
+import me.saket.press.shared.editor.EditorScreenKey
+import me.saket.press.shared.editor.ExistingNoteId
+import me.saket.press.shared.fakeFolder
+import me.saket.press.shared.fakeNote
 import me.saket.press.shared.home.HomeEvent.NewNoteClicked
+import me.saket.press.shared.home.HomeEvent.SearchTextChanged
+import me.saket.press.shared.home.HomeModel.FolderModel
+import me.saket.press.shared.home.HomeModel.NoteModel
 import me.saket.press.shared.home.HomePresenter.Args
-import me.saket.press.shared.home.HomeUiEffect.ComposeNewNote
-import me.saket.press.shared.home.HomeUiModel.Note
-import me.saket.press.shared.note.FakeNoteRepository
+import me.saket.press.shared.testInsert
+import me.saket.press.shared.keyboard.KeyboardShortcuts
+import me.saket.press.shared.keyboard.RealKeyboardShortcuts
+import me.saket.press.shared.localization.ENGLISH_STRINGS
+import me.saket.press.shared.ui.HighlightedText
+import me.saket.press.shared.rx.RxRule
+import me.saket.press.shared.rx.test
+import me.saket.press.shared.time.FakeClock
+import me.saket.press.shared.ui.FakeNavigator
+import me.saket.press.shared.ui.highlight
+import kotlin.test.AfterTest
 import kotlin.test.Test
 
-class HomePresenterTest {
+class HomePresenterTest : BaseDatabaeTest() {
+  private val keyboardShortcuts = RealKeyboardShortcuts()
+  private val navigator = FakeNavigator()
+  private val rxRule = RxRule()
+  private val clock = FakeClock()
+  private val noteQueries get() = database.noteQueries
+  private val folderQueries get() = database.folderQueries
 
-  private val noteRepository = FakeNoteRepository()
-  private val events = publishSubject<HomeEvent>()
-
-  private fun presenter(includeEmptyNotes: Boolean = true) = HomePresenter(
-      args = Args(includeEmptyNotes),
-      repository = noteRepository
-  )
-
-  @Test fun `populate notes on creation`() {
-    val noteUuid = uuid4()
-    noteRepository.savedNotes += listOf(
-        fakeNote(
-            uuid = noteUuid,
-            localId = -1L,
-            content = "# Nicolas Cage\nOur national treasure"
-        )
+  private fun presenter(
+    folder: FolderId? = null,
+    includeEmptyNotes: Boolean = true
+  ): HomePresenter {
+    return HomePresenter(
+      args = Args(HomeScreenKey(folder = folder), includeEmptyNotes, navigator),
+      keyboardShortcuts = keyboardShortcuts,
+      database = database,
+      schedulers = FakeSchedulers(),
+      strings = ENGLISH_STRINGS,
+      clock = clock
     )
+  }
 
-    val noteModel = presenter()
-        .uiModels(events)
-        .test()
-        .values[0]
-        .notes
+  @AfterTest
+  fun finish() {
+    rxRule.assertEmpty()
+  }
 
-    assertThat(noteModel).containsOnly(
-        Note(
-            noteUuid = noteUuid,
-            adapterId = -1L,
-            title = "Nicolas Cage",
-            body = "Our national treasure"
-        )
+  @Test fun `populate folders and notes for home screen`() {
+    val archive = fakeFolder("archive")
+    folderQueries.testInsert(archive)
+
+    val witcher3 = fakeNote("The Witcher 3 Wild Hunt")
+    val uncharted = fakeNote("# Uncharted\nThe Lost Legacy", folderId = archive.id)
+    noteQueries.testInsert(witcher3, uncharted)
+
+    val presenter = presenter()
+    val models = presenter.models()
+      .map { it.rows }
+      .test(rxRule)
+
+    presenter.dispatch(SearchTextChanged(text = ""))
+    assertThat(models.popValue()).containsOnly(
+      FolderModel(
+        id = archive.id,
+        title = "archive",
+      ),
+      NoteModel(
+        id = witcher3.id,
+        title = "".highlight(),
+        body = "The Witcher 3 Wild Hunt".highlight()
+      )
+    )
+  }
+
+  @Test fun `populate sub-folders and notes for a folder`() {
+    val archive = fakeFolder("archive")
+    val games = fakeFolder("games", parent = archive.id)
+    folderQueries.testInsert(archive, games)
+
+    val nicolasCage = fakeNote(content = "# Nicolas Cage\nOur national treasure", folderId = null)
+    val witcher3 = fakeNote(content = "# The Witcher 3\nWild Hunt", folderId = archive.id)
+    val uncharted = fakeNote(content = "# Uncharted\nThe Lost Legacy", folderId = games.id)
+    noteQueries.testInsert(nicolasCage, witcher3, uncharted)
+
+    val presenter = presenter(folder = archive.id)
+    val models = presenter.models()
+      .map { it.rows }
+      .test(rxRule)
+
+    presenter.dispatch(SearchTextChanged(text = ""))
+    assertThat(models.popValue()).containsOnly(
+      FolderModel(
+        id = games.id,
+        title = "games",
+      ),
+      NoteModel(
+        id = witcher3.id,
+        title = "The Witcher 3".highlight(),
+        body = "Wild Hunt".highlight()
+      ),
+    )
+  }
+
+  @Test fun `populate filtered notes when searching in the root folder`() {
+    val games = fakeFolder("games")
+    val archive = fakeFolder("archive")
+    folderQueries.testInsert(games, archive)
+
+    val uncharted = fakeNote("# Uncharted")
+    val gambling = fakeNote("# Gambling")
+    val archivedWitcher = fakeNote("# The Archived Witcher 3 (game)", folderId = archive.id)
+    noteQueries.testInsert(uncharted, gambling, archivedWitcher)
+
+    val presenter = presenter(folder = null)
+    val models = presenter.models()
+      .map { it.rows }
+      .test(rxRule)
+
+    presenter.dispatch(SearchTextChanged(text = "gam"))
+    assertThat(models.popValue()).containsOnly(
+      NoteModel(
+        id = gambling.id,
+        title = "Gambling".highlight("gam"),
+        body = "".highlight()
+      )
+    )
+  }
+
+  @Test fun `populate filtered notes when searching in a folder that contains nested folders`() {
+    val archive = fakeFolder("archive")
+    val gamesFolder = fakeFolder("games", parent = archive.id)
+    val rpgGamesFolder = fakeFolder("rpg", parent = gamesFolder.id)
+    folderQueries.testInsert(archive, gamesFolder, rpgGamesFolder)
+
+    val gamesToBuy = fakeNote("# Games to buy", folderId = archive.id)
+    val unravel2 = fakeNote("# Unravel 2 (game)", folderId = gamesFolder.id)
+    val witcher3 = fakeNote("# Witcher 3 (game)", folderId = rpgGamesFolder.id)
+    noteQueries.testInsert(gamesToBuy, unravel2, witcher3)
+
+    val presenter = presenter(folder = archive.id)
+    val models = presenter.models()
+      .map { it.rows }
+      .test(rxRule)
+
+    presenter.dispatch(SearchTextChanged(text = "game"))
+    assertThat(models.popValue()).containsOnly(
+      NoteModel(
+        id = gamesToBuy.id,
+        title = "Games to buy".highlight("game"),
+        body = "".highlight()
+      ),
+      NoteModel(
+        id = unravel2.id,
+        title = "Unravel 2 (game)".highlight("game"),
+        body = "".highlight()
+      ),
+      NoteModel(
+        id = witcher3.id,
+        title = "Witcher 3 (game)".highlight("game"),
+        body = "".highlight()
+      )
     )
   }
 
   @Test fun `filter out empty notes if requested`() {
-    noteRepository.savedNotes += listOf(
-        fakeNote(uuid = uuid4(), content = "# Non-empty note"),
-        fakeNote(uuid = uuid4(), content = NEW_NOTE_PLACEHOLDER),
-        fakeNote(uuid = uuid4(), content = "")
+    noteQueries.testInsert(
+      fakeNote(id = NoteId.generate(), content = "# Non-empty note"),
+      fakeNote(id = NoteId.generate(), content = "# "),
+      fakeNote(id = NoteId.generate(), content = ""),
+      fakeNote(id = NoteId.generate(), content = "  "),
     )
 
-    presenter(includeEmptyNotes = false)
-        .uiModels(events)
-        .test()
-        .apply {
-          val titleAndBodies = values[0].notes.map { it.title to it.body }
-          assertThat(titleAndBodies).containsOnly("Non-empty note" to "")
-        }
+    val presenter = presenter(includeEmptyNotes = false)
+    val titlesAndBodies = presenter.models()
+      .map { model -> model.notes.map { it.title.text to it.body.text } }
+      .test(rxRule)
+
+    presenter.dispatch(SearchTextChanged(text = ""))
+    assertThat(titlesAndBodies.popValue()).containsOnly("Non-empty note" to "")
   }
 
   @Test fun `include empty notes if requested`() {
-    noteRepository.savedNotes += listOf(
-        fakeNote(uuid = uuid4(), content = "# Non-empty note"),
-        fakeNote(uuid = uuid4(), content = NEW_NOTE_PLACEHOLDER),
-        fakeNote(uuid = uuid4(), content = "")
+    noteQueries.testInsert(
+      fakeNote(id = NoteId.generate(), content = "# Non-empty note"),
+      fakeNote(id = NoteId.generate(), content = "# "),
+      fakeNote(id = NoteId.generate(), content = ""),
+      fakeNote(id = NoteId.generate(), content = "  "),
     )
 
-    presenter(includeEmptyNotes = true)
-        .uiModels(events)
-        .test()
-        .apply {
-          val titleAndBodies = values[0].notes.map { it.title to it.body }
-          assertThat(titleAndBodies).containsOnly(
-              "Non-empty note" to "",
-              "" to "",
-              "" to ""
-          )
-        }
+    val presenter = presenter(includeEmptyNotes = true)
+    val titlesAndBodies = presenter.models()
+      .map { model -> model.notes.map { it.title.text to it.body.text } }
+      .test(rxRule)
+
+    presenter.dispatch(SearchTextChanged(text = ""))
+    assertThat(titlesAndBodies.popValue()).containsOnly(
+      "Non-empty note" to "",
+      "" to "",
+      "" to "",
+      "" to "",
+    )
   }
 
   @Test fun `open new note screen when new note is clicked`() {
-    presenter().uiEffects(events)
-        .test()
-        .also { events.onNext(NewNoteClicked) }
-        .assertValue(ComposeNewNote)
+    val presenter = presenter().also {
+      it.models().test()
+    }
+    assertThat(noteQueries.allNotes().executeAsList()).isEmpty()
+
+    presenter.dispatch(NewNoteClicked)
+
+    val savedNote = noteQueries.allNotes().executeAsOneOrNull()
+    checkNotNull(savedNote)
+    assertThat(navigator.pop()).isEqualTo(
+      EditorScreenKey(NewNote(ExistingNoteId(savedNote.id)))
+    )
   }
+
+  @Test fun `open new note screen on new-note keyboard shortcut`() {
+    presenter().models().test()
+    assertThat(noteQueries.allNotes().executeAsList()).isEmpty()
+
+    keyboardShortcuts.broadcast(KeyboardShortcuts.newNote)
+
+    val savedNote = noteQueries.allNotes().executeAsOneOrNull()
+    checkNotNull(savedNote)
+    assertThat(navigator.pop()).isEqualTo(
+      EditorScreenKey(NewNote(ExistingNoteId(savedNote.id)))
+    )
+  }
+
+  @Test fun `create new note in the current folder`() {
+    val folderId = FolderId.generate()
+    val presenter = presenter(folder = folderId).also {
+      it.models().test()
+    }
+
+    presenter.dispatch(NewNoteClicked)
+
+    val savedNote = noteQueries.allNotes().executeAsOne()
+    assertThat(savedNote.folderId).isEqualTo(folderId)
+  }
+
+  private fun String.highlight() = HighlightedText(this)
 }

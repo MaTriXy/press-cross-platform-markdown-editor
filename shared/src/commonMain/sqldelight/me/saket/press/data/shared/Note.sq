@@ -1,47 +1,145 @@
-import com.benasher44.uuid.Uuid;
 import com.soywiz.klock.DateTime;
+import me.saket.press.shared.db.FolderId;
+import me.saket.press.shared.db.NoteId;
+import me.saket.press.shared.syncer.SyncState;
 
 CREATE TABLE note (
-  localId INTEGER PRIMARY KEY AUTOINCREMENT,
-  uuid TEXT AS Uuid NOT NULL,
+  id TEXT AS NoteId NOT NULL,
   content TEXT NOT NULL,
   createdAt TEXT AS DateTime NOT NULL,
   updatedAt TEXT AS DateTime NOT NULL,
-  archivedAtString TEXT AS String,
-  deletedAtString TEXT AS String
+  isPendingDeletion INTEGER AS Boolean NOT NULL DEFAULT 0,
+  syncState TEXT AS SyncState NOT NULL DEFAULT 'PENDING',
+  folderId TEXT AS FolderId
 );
 
 CREATE INDEX note_content ON note(content);
 
-notes:
+-- Mark as pending-sync when notes are updated.
+CREATE TRIGGER pending_sync_on_content_update
+AFTER UPDATE OF content ON note
+BEGIN
+	UPDATE note
+  SET syncState = 'PENDING'
+  WHERE id = new.id;
+END;
+
+CREATE TRIGGER pending_sync_on_deletion_update
+AFTER UPDATE OF isPendingDeletion ON note
+BEGIN
+	UPDATE note
+  SET syncState = 'PENDING'
+  WHERE id = new.id;
+END;
+
+CREATE TRIGGER pending_sync_on_folder_update
+AFTER UPDATE OF folderId ON note
+BEGIN
+	UPDATE note
+  SET syncState = 'PENDING'
+  WHERE id = new.id;
+END;
+
+-- Used by folder.sq
+CREATE VIEW visibleNonEmptyNotes AS
 SELECT *
 FROM note
-WHERE deletedAtString IS NULL AND archivedAtString IS NULL
+WHERE isPendingDeletion IS 0 AND trim(content) != '' AND trim(content) != '#';
+
+visibleNotesInFolder:
+SELECT *
+FROM note
+WHERE folderId = ? AND isPendingDeletion IS 0
 ORDER BY updatedAt DESC;
+
+visibleNotesInDeepFolders:
+SELECT *
+FROM note
+WHERE
+  folderId IN (
+    SELECT id FROM folders_with_roots
+    WHERE root_id = :folderId
+  )
+  AND isPendingDeletion IS 0
+  AND (content LIKE ('%' || :searchText || '%') OR trim(:searchText) = '')
+ORDER BY updatedAt DESC;
+
+visibleNonArchivedNotes:
+SELECT *
+FROM note
+WHERE (
+    folderId IS NULL
+    OR folderId NOT IN ( SELECT id FROM folders_with_roots WHERE root_name = 'archive' )
+  )
+  AND isPendingDeletion IS 0
+  AND (content LIKE ('%' || :searchText || '%') OR trim(:searchText) = '')
+ORDER BY updatedAt DESC;
+
+archivedNotes:
+SELECT *
+FROM note
+WHERE folderId IN (
+  SELECT id FROM folders_with_roots
+  WHERE root_name = 'archive'
+);
+
+allNotes:
+SELECT *
+FROM note
+ORDER BY updatedAt ASC;
+
+notesInState:
+SELECT *
+FROM note
+WHERE syncState IN ?
+ORDER BY updatedAt ASC;
 
 note:
 SELECT *
 FROM note
-WHERE uuid = ?;
+WHERE id = ?;
+
+exists:
+SELECT count(id) > 0
+FROM note
+WHERE id = ?;
 
 insert:
-INSERT INTO note
-VALUES (?,?,?,?,?,?,?);
+INSERT INTO note(id, folderId, content, createdAt, updatedAt)
+VALUES (?, ?, ?, ?, ?);
 
 updateContent:
 UPDATE note
-SET content = ?, updatedAt = ?
-WHERE uuid = ?;
+SET content = :content, updatedAt = ?
+WHERE id = ? AND TRIM(content) != TRIM(:content);
 
-markAsDeleted:
+updateFolder:
 UPDATE note
-SET deletedAtString = ?
-WHERE uuid = ?;
+SET folderId = ?
+WHERE id = ?;
 
-markAsArchived:
+updateSyncState:
 UPDATE note
-SET archivedAtString = ?
-WHERE uuid = ?;
+SET syncState = ?
+WHERE id IN :ids;
+
+swapSyncStates:
+UPDATE note
+SET syncState = :new
+WHERE syncState IN :old;
+
+markAsPendingDeletion:
+UPDATE note
+SET isPendingDeletion = 1
+WHERE id = ? AND isPendingDeletion != 1;
+
+deleteNote:
+DELETE
+FROM note
+WHERE id = ?
+  -- to safe-guard against mistakes:
+  AND isPendingDeletion = 1
+  AND syncState = 'IN_FLIGHT';
 
 -- Test functions
 testInsert:

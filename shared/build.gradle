@@ -1,13 +1,18 @@
-apply plugin: 'com.android.library'
-apply plugin: 'org.jetbrains.kotlin.multiplatform'
-apply plugin: 'kotlin-android-extensions'
+apply plugin: "com.android.library"
+apply plugin: "kotlin-multiplatform"
+apply plugin: "kotlin-android-extensions"
 apply plugin: "com.squareup.sqldelight"
+apply plugin: "org.jetbrains.kotlin.native.cocoapods"
+apply plugin: "com.codingfeline.buildkonfig"
+apply plugin: 'kotlinx-serialization'
+apply plugin: 'org.jlleitschuh.gradle.ktlint'
+apply plugin: 'app.cash.exhaustive'
 
 android {
-  compileSdkVersion projectVersions.compileSdk
-  defaultConfig {
-    minSdkVersion projectVersions.minSdk
-  }
+  compileSdkVersion versions.compileSdk
+  defaultConfig.minSdkVersion versions.minSdk
+  testOptions.unitTests.includeAndroidResources = true
+  sourceSets["main"].manifest.srcFile("src/androidMain/AndroidManifest.xml")
 }
 
 sqldelight {
@@ -17,19 +22,22 @@ sqldelight {
   }
 }
 
-// Not sure, but probably used by CocoaPods.
-version = 0.1
+tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
+  kotlinOptions {
+    jvmTarget = "1.8"
+  }
+}
 
 kotlin {
-  android("android")
-
-  def buildForDevice = project.findProperty("device")?.toBoolean() ?: false
-  def iosTarget = (buildForDevice) ? iosArm64('ios') : iosX64('ios')
-  iosTarget.binaries {
-    framework {
-      // Disable bitcode embedding for the simulator build.
-      if (!buildForDevice) {
-        embedBitcode("disable")
+  targets {
+    fromPreset(presets.android, "android")
+    fromPreset(presets.macosX64, "macos") {
+      compilations.main.kotlinOptions.freeCompilerArgs += "-Xobjc-generics"
+      binaries {
+        framework("shared") {
+          isStatic = false
+          linkerOpts.add("-lsqlite3")
+        }
       }
     }
   }
@@ -38,14 +46,26 @@ kotlin {
     commonMain {
       dependencies {
         implementation project(':wysiwyg')
-        implementation kotlin('stdlib-common')
-        implementation deps.reaktive.core.common
-        implementation deps.koin.core.common
+        implementation project(':kgit')
+        api deps.reaktive.core.common
+        implementation deps.reaktive.interop.coroutines
+        implementation deps.koin
         implementation deps.multiplatformUuid
         implementation deps.klock.common
         implementation deps.sqlDelight.runtime.common
-        implementation deps.stately
+        implementation deps.stately.common
+        implementation deps.stately.concurrency
+        implementation deps.stately.isolate
+        implementation deps.stately.isoCollections
         implementation deps.multiplatformSettings.core
+        implementation deps.ktor.client.core
+        implementation deps.ktor.logger
+        implementation deps.ktor.kotlinxSerialization
+        implementation deps.kotlinx.serialization
+        implementation (deps.kotlinx.coroutines) { force = true }
+        implementation deps.korio
+        implementation deps.exhaustive.annotation
+        implementation deps.colorMath
       }
     }
     commonTest {
@@ -56,19 +76,19 @@ kotlin {
         implementation deps.reaktive.testing.utils
         implementation deps.multiplatformSettings.testing
         implementation deps.assertK.common
-        implementation deps.assertK.opentest4j  // https://youtrack.jetbrains.com/issue/IDEA-214533
-        implementation deps.statelyCollections
+        implementation deps.assertK.opentest4j // https://youtrack.jetbrains.com/issue/IDEA-214533
       }
     }
     androidMain {
       dependencies {
-        implementation kotlin('stdlib')
         implementation deps.androidx.appCompat
         implementation deps.androidx.preferences
         implementation deps.timber
         implementation deps.rx2.core
-        implementation deps.reaktive.interop.android
+        implementation deps.rx2.kotlin
+        implementation deps.reaktive.interop.rxJava2
         implementation deps.sqlDelight.driver.android
+        implementation deps.ktor.client.okHttp
       }
     }
     androidTest {
@@ -76,54 +96,60 @@ kotlin {
         implementation kotlin('test')
         implementation kotlin('test-junit')
         implementation deps.androidx.test.jUnit
-        implementation deps.robolectric
+        implementation deps.sqlDelight.driver.jvm
       }
     }
-    iosMain {
+    nativeMain {
       dependencies {
-        implementation deps.sqlDelight.driver.iOS
+        implementation deps.sqlDelight.driver.native
+        implementation deps.ktor.client.cio
+        implementation (deps.kotlinx.coroutines) { force = true }
       }
     }
-    iosTest {}
-
+    nativeTest {
+      dependencies {
+        implementation (deps.kotlinx.coroutines) { force = true }
+      }
+    }
+    macosMain {
+      dependsOn(nativeMain)
+    }
+    macosTest {
+      dependsOn(nativeTest)
+    }
     all {
       languageSettings {
+        languageVersion = '1.5'
         enableLanguageFeature('InlineClasses')
         useExperimentalAnnotation('kotlin.Experimental')
+        useExperimentalAnnotation('com.russhwolf.settings.ExperimentalSettingsApi')
       }
     }
   }
 }
+
+kotlin.cocoapods {
+  summary = "A cross-platform markdown editor"
+  homepage = "https://github.com/saket/press"
+}
+version = 1.0 // also used by cocoapods plugin.
 
 dependencies {}
 
-task copyFramework {
-  def buildType = project.findProperty("kotlin.build.type") ?: "DEBUG"
-  dependsOn "link${buildType.toLowerCase().capitalize()}FrameworkIos"
+buildkonfig {
+  Properties secrets = new Properties()
+  def secretsFile = new File('shared/secrets.properties')
+  if (secretsFile.exists()) {
+    secrets.load(new FileInputStream(secretsFile))
+  }
 
-  doLast {
-    def srcFile = kotlin.targets.ios.binaries.getFramework(buildType).outputFile
-    def targetDir = getProperty("configuration.build.dir")
-    copy {
-      from srcFile.parent
-      into targetDir
-      include 'shared.framework/**'
-      include 'shared.framework.dSYM'
-    }
+  packageName = "me.saket.press.shared"
+  defaultConfigs {
+    buildConfigField "String", "GITHUB_CLIENT_ID", secrets["github_client_id"] ?: "nicolas_cage"
+    buildConfigField "String", "GITHUB_CLIENT_SECRET", secrets["github_client_secret"] ?: "nicolas_cage"
+    buildConfigField "String", "GIT_TEST_REPO_SSH_URL", secrets["git_test_repo_ssh_url"] ?: ""
+    buildConfigField "String", "GIT_TEST_REPO_BRANCH", secrets["git_test_repo_branch"] ?: ""
+    buildConfigField "String", "GIT_TEST_SSH_PRIV_KEY", secrets["git_test_ssh_private_key"] ?: ""
+    buildConfigField "String", "GIT_TEST_PERSONAL_KEY", secrets["git_test_personal_key"] ?: ""
   }
 }
-
-task iosTest {
-  def device = project.findProperty("iosDevice")?.toString() ?: "iPhone 8"
-  dependsOn 'linkDebugTestIos'
-  group = JavaBasePlugin.VERIFICATION_GROUP
-  description = "Runs tests for target 'ios' on an iOS simulator"
-
-  doLast {
-    def binary = kotlin.targets.ios.binaries.getTest('DEBUG').outputFile
-    exec {
-      commandLine 'xcrun', 'simctl', 'spawn',  '--standalone', device, binary.absolutePath
-    }
-  }
-}
-tasks.check.dependsOn iosTest

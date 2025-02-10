@@ -3,10 +3,9 @@
   package="me.saket.press">
 
   <uses-permission android:name="android.permission.INTERNET" />
-  <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
 
   <application
-    android:name="press.ReleaseApp"
+    android:name="press.ReleasePressApp"
     android:allowBackup="true"
     android:icon="@mipmap/ic_launcher"
     android:label="@string/app_name"
@@ -15,22 +14,35 @@
     android:theme="@style/AppTheme"
     tools:ignore="AllowBackup,GoogleAppIndexingWarning">
 
-    <activity android:name="press.home.HomeActivity">
+    <activity
+      android:name="press.navigation.TheActivity"
+      android:windowSoftInputMode="adjustResize"
+      android:launchMode="singleTask">
+
       <intent-filter>
         <action android:name="android.intent.action.MAIN" />
         <category android:name="android.intent.category.LAUNCHER" />
       </intent-filter>
 
-      <meta-data
-        android:name="android.app.shortcuts"
-        android:resource="@xml/shortcuts" />
+      <!-- Share receiver. -->
+      <intent-filter>
+        <action android:name="android.intent.action.SEND" />
+        <category android:name="android.intent.category.DEFAULT" />
+        <data android:mimeType="text/plain" />
+      </intent-filter>
+
+      <!-- Git host integration. -->
+      <intent-filter>
+        <action android:name="android.intent.action.VIEW" />
+        <category android:name="android.intent.category.DEFAULT" />
+        <category android:name="android.intent.category.BROWSABLE" />
+        <data android:scheme="intent" android:host="press" />
+      </intent-filter>
     </activity>
 
     <activity
-      android:name="press.editor.EditorActivity"
-      android:theme="@style/AppTheme.TransparentWindow"
-      android:windowSoftInputMode="adjustResize" />
-
-    <activity android:name="press.ShortcutReceiverActivity" />
+      android:name="press.navigation.NewTaskTheActivity"
+      android:windowSoftInputMode="adjustResize"
+      android:launchMode="standard" />
   </application>
 </manifest>

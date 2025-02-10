@@ -1,5 +1,5 @@
 ## Testing and Debugging
-Press uses fakes for writing tests and avoids mocks because they’re terrible. Assertions are written using [AssertK](https://github.com/willowtreeapps/assertk). Tests that involve storage are run on the JVM so that an in-memory SQL database can be used ([example](https://github.com/saket/Press/blob/master/shared/src/commonTest/kotlin/me/saket/press/shared/note/RealNoteRepositoryTest.kt#L20)).
+Press uses fakes for writing tests and avoids mocks because they’re terrible. Assertions are written using [AssertK](https://github.com/willowtreeapps/assertk). Tests that involve storage are run on the JVM so that an in-memory SQL database can be used ([example](https://github.com/saket/press/blob/971272acedbd2d1f4bf8572d1ca8ba777eb68267/shared/src/commonTest/kotlin/me/saket/press/shared/home/HomePresenterTest.kt#L62:L102)).
 
 The best way to run the tests right now would be from the command line using `./gradlew shared:testDebug`. They can be run from the Android Studio or IntelliJ IDEA as well, but testing support for multiplatform code from the IDE is a bit flaky right now ([related issue](https://youtrack.jetbrains.com/issue/KT-34535)). An alternative is to manually create run configurations for running custom gradle tasks:
 
@@ -41,4 +41,4 @@ Let’s make this worse. What happens if `Adder#add()` is changed to return a `S
 The test will continue to pass, but the implementation won’t work anymore.  Mocks become worse when we start passing around a “promise” of result instead of the actual result. 
 
 If you’re still unconvinced, Artur Dryomov’s blog post is a good read this subject:
-[Superior Testing: Make Fakes not Mocks](https://arturdryomov.online/posts/superior-testing-make-fakes-not-mocks/)
+[Superior Testing: Make Fakes not Mocks](https://arturdryomov.dev/posts/superior-testing-make-fakes-not-mocks/)

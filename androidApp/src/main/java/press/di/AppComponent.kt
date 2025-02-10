@@ -1,19 +1,26 @@
 package press.di
 
-import press.editor.EditorActivity
-import press.home.HomeActivity
-import press.home.HomeView
+import android.app.Application
+import dagger.BindsInstance
 import dagger.Component
-import io.reactivex.Observable
-import me.saket.press.shared.theme.ThemePalette
-import me.saket.press.shared.localization.Strings
+import me.saket.press.shared.syncer.SyncCoordinator
+import me.saket.press.shared.theme.AppTheme
+import me.saket.press.shared.ui.ScreenResults
+import press.navigation.ViewFactories
+import javax.inject.Singleton
 
+@Singleton
 @Component(modules = [AppModule::class])
 interface AppComponent {
-  fun inject(target: HomeActivity)
-  fun inject(target: HomeView)
-  fun inject(target: EditorActivity)
+  fun theme(): AppTheme
+  fun syncCoordinator(): SyncCoordinator
+  fun viewFactories(): ViewFactories
+  fun screenResults(): ScreenResults
 
-  fun themePalette(): Observable<ThemePalette>
-  fun strings(): Strings
+  @Component.Builder
+  interface Builder {
+    @BindsInstance
+    fun application(app: Application): Builder
+    fun build(): AppComponent
+  }
 }

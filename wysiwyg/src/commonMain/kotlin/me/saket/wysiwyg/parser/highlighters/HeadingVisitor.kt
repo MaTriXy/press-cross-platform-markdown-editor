@@ -1,15 +1,12 @@
 package me.saket.wysiwyg.parser.highlighters
 
-import me.saket.wysiwyg.parser.SpanWriter
+import me.saket.wysiwyg.parser.MarkdownRenderer
 import me.saket.wysiwyg.parser.node.Heading
 import me.saket.wysiwyg.parser.node.endOffset
 import me.saket.wysiwyg.parser.node.headingLevel
 import me.saket.wysiwyg.parser.node.isAtxHeading
 import me.saket.wysiwyg.parser.node.openingMarker
 import me.saket.wysiwyg.parser.node.startOffset
-import me.saket.wysiwyg.spans.SpanPool
-import me.saket.wysiwyg.spans.foregroundColor
-import me.saket.wysiwyg.spans.heading
 
 @Suppress("SpellCheckingInspection")
 class HeadingVisitor : SyntaxHighlighter<Heading> {
@@ -34,19 +31,22 @@ class HeadingVisitor : SyntaxHighlighter<Heading> {
     object : NodeVisitor<Heading> {
       override fun visit(
         node: Heading,
-        pool: SpanPool,
-        writer: SpanWriter
+        renderer: MarkdownRenderer
       ) {
-        writer.add(pool.heading(node.headingLevel), node.startOffset, node.endOffset)
-        writer.add(
-            pool.foregroundColor(pool.style.syntaxColor),
-            node.startOffset,
-            node.startOffset + node.openingMarker.length
+        renderer.addHeading(
+          level = node.headingLevel,
+          from = node.startOffset,
+          to = node.endOffset
         )
-        writer.add(
-            pool.foregroundColor(pool.style.heading.textColor),
-            node.startOffset + node.openingMarker.length,
-            node.endOffset
+        renderer.addForegroundColor(
+          color = renderer.style.syntaxColor,
+          from = node.startOffset,
+          to = node.startOffset + node.openingMarker.length
+        )
+        renderer.addForegroundColor(
+          color = renderer.style.heading.textColor,
+          from = node.startOffset + node.openingMarker.length,
+          to = node.endOffset
         )
       }
     }

@@ -1,239 +1,190 @@
 package press.home
 
-import android.app.Activity
 import android.content.Context
-import android.graphics.Color.BLACK
-import android.os.Parcelable
-import android.view.animation.PathInterpolator
-import androidx.appcompat.widget.Toolbar
-import androidx.core.content.ContextCompat
-import androidx.core.view.doOnLayout
-import androidx.core.view.postDelayed
-import androidx.core.view.updatePadding
+import android.util.AttributeSet
+import androidx.core.view.isVisible
+import androidx.recyclerview.widget.ConcatAdapter
 import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView.State
+import androidx.transition.Fade
+import androidx.transition.TransitionManager
 import com.google.android.material.floatingactionbutton.FloatingActionButton
-import com.jakewharton.rxbinding3.view.clicks
 import com.jakewharton.rxbinding3.view.detaches
-import com.mikepenz.itemanimators.AlphaInAnimator
 import com.squareup.contour.ContourLayout
 import com.squareup.inject.assisted.Assisted
-import com.squareup.inject.assisted.AssistedInject
+import com.squareup.inject.inflation.InflationInject
+import io.reactivex.Observable
 import io.reactivex.android.schedulers.AndroidSchedulers.mainThread
-import io.reactivex.subjects.BehaviorSubject
 import me.saket.inboxrecyclerview.InboxRecyclerView
-import me.saket.inboxrecyclerview.dimming.TintPainter
-import me.saket.inboxrecyclerview.page.ExpandablePageLayout
+import me.saket.inboxrecyclerview.expander.InboxItemExpander
 import me.saket.press.R
 import me.saket.press.shared.editor.EditorOpenMode.ExistingNote
-import me.saket.press.shared.home.HomeEvent
+import me.saket.press.shared.editor.EditorScreenKey
 import me.saket.press.shared.home.HomeEvent.NewNoteClicked
-import me.saket.press.shared.home.HomeEvent.WindowFocusChanged
+import me.saket.press.shared.home.HomeEvent.SearchTextChanged
+import me.saket.press.shared.home.HomeModel
 import me.saket.press.shared.home.HomePresenter
 import me.saket.press.shared.home.HomePresenter.Args
-import me.saket.press.shared.home.HomeUiEffect
-import me.saket.press.shared.home.HomeUiEffect.ComposeNewNote
-import me.saket.press.shared.home.HomeUiModel
-import me.saket.press.shared.subscribe
-import me.saket.press.shared.uiUpdates
-import press.editor.EditorActivity
-import press.editor.EditorView
-import press.theme.themeAware
-import press.theme.themed
-import press.util.exhaustive
-import press.util.heightOf
-import press.util.second
-import press.util.suspendWhile
-import press.util.throttleFirst
-import press.widgets.BackPressInterceptResult
-import press.widgets.BackPressInterceptResult.BACK_PRESS_IGNORED
-import press.widgets.BackPressInterceptResult.BACK_PRESS_INTERCEPTED
-import press.widgets.SpacingBetweenItemsDecoration
-import press.widgets.addStateChangeCallbacks
-import press.widgets.attr
-import press.widgets.doOnNextAboutToCollapse
-import press.widgets.doOnNextCollapse
-import press.widgets.hideKeyboard
-import press.widgets.interceptPullToCollapseOnView
-import press.widgets.suspendWhileExpanded
+import me.saket.press.shared.home.HomeScreenKey
+import me.saket.press.shared.ui.ScreenKey
+import me.saket.press.shared.ui.models
+import press.extensions.doOnTextChange
+import press.extensions.hideKeyboard
+import press.extensions.second
+import press.extensions.throttleFirst
+import press.navigation.BackPressInterceptor
+import press.navigation.BackPressInterceptor.InterceptResult
+import press.navigation.ScreenFocusChangeListener
+import press.navigation.navigator
+import press.navigation.screenKey
+import press.navigation.transitions.ExpandableScreenHost
+import press.widgets.DividerItemDecoration
+import press.widgets.SlideDownItemAnimator
+import press.widgets.insets.keyboardHeight
 
-class HomeView @AssistedInject constructor(
+class HomeView @InflationInject constructor(
   @Assisted context: Context,
-  private val noteAdapter: NoteAdapter,
-  private val presenter: HomePresenter.Factory,
-  private val editorViewFactory: EditorView.Factory
-) : ContourLayout(context) {
+  @Assisted attrs: AttributeSet? = null,
+  private val presenter: HomePresenter.Factory
+) : ContourLayout(context), ScreenFocusChangeListener, ExpandableScreenHost, BackPressInterceptor {
 
-  private val activity = context as Activity
-  private val windowFocusChanges = BehaviorSubject.createDefault(WindowFocusChanged(hasFocus = true))
+  private val noteAdapter = NoteListAdapter()
+  private val folderAdapter = FolderListAdapter()
+  private val screenKey = screenKey<HomeScreenKey>()
 
-  private val toolbar = themed(Toolbar(context)).apply {
-    setTitle(R.string.app_name)
-    applyLayout(
-        x = leftTo { parent.left() }.rightTo { parent.right() },
-        y = topTo { parent.top() }.heightOf(attr(android.R.attr.actionBarSize))
-    )
-  }
+  override val toolbar = HomeToolbar(
+    context = context,
+    showNavIcon = !HomeScreenKey.isRoot(screenKey)
+  )
 
-  private val notesList = themed(InboxRecyclerView(context)).apply {
+  private val emptyStateView = EmptyStateView(context)
+
+  private val notesList = InboxRecyclerView(context).apply {
     id = R.id.home_notes
-    layoutManager = LinearLayoutManager(context)
-    adapter = noteAdapter
-    tintPainter = TintPainter.uncoveredArea(color = BLACK, opacity = 0.25f)
-    itemAnimator = AlphaInAnimator()
-    toolbar.doOnLayout {
-      updatePadding(top = toolbar.height)
-    }
-    addItemDecoration(SpacingBetweenItemsDecoration(1.dip))
-    applyLayout(
-        x = leftTo { parent.left() }.rightTo { parent.right() },
-        y = topTo { parent.top() }.bottomTo { parent.bottom() }
-    )
+    itemAnimator = SlideDownItemAnimator()
+    addItemDecoration(DividerItemDecoration())
   }
 
-  private val newNoteFab = themed(FloatingActionButton(context)).apply {
+  private val newNoteFab = FloatingActionButton(context).apply {
     setImageResource(R.drawable.ic_note_add_24dp)
-    applyLayout(
-        x = rightTo { parent.right() - 24.dip },
-        y = bottomTo { parent.bottom() - 24.dip }
-    )
   }
-
-  private val noteEditorPage = ExpandablePageLayout(context).apply {
-    id = R.id.home_editor
-    notesList.expandablePage = this
-    elevation = 20f.dip
-    animationInterpolator = PathInterpolator(0.5f, 0f, 0f, 1f)
-    animationDurationMillis = 350
-    pushParentToolbarOnExpand(toolbar)
-    themeAware {
-      setBackgroundColor(it.window.backgroundColor)
-    }
-    applyLayout(
-        x = leftTo { parent.left() }.rightTo { parent.right() },
-        y = topTo { parent.top() }.bottomTo { parent.bottom() }
-    )
-  }
-
-  private var activeNote: ActiveNote? = null
-    set(note) {
-      field = note
-      if (note == null) {
-        notesList.collapse()
-      } else {
-        val editorView = editorViewFactory.create(
-            context = context,
-            openMode = ExistingNote(note.noteUuid),
-            onDismiss = notesList::collapse
-        )
-        noteEditorPage.addView(editorView)
-        noteEditorPage.doOnNextCollapse { it.removeView(editorView) }
-        noteEditorPage.pullToCollapseInterceptor = interceptPullToCollapseOnView(editorView.scrollView)
-      }
-    }
 
   init {
     id = R.id.home_view
-    setupNoteEditorPage()
+
+    toolbar.layoutBy(
+      x = leftTo { parent.left() }.rightTo { parent.right() },
+      y = topTo { parent.top() }
+    )
+    emptyStateView.layoutBy(
+      x = matchParentX(),
+      y = centerVerticallyTo { parent.centerY() }
+    )
+    notesList.layoutBy(
+      x = leftTo { parent.left() }.rightTo { parent.right() },
+      y = topTo { toolbar.bottom() }.bottomTo { parent.bottom() }
+    )
+    newNoteFab.layoutBy(
+      x = rightTo { parent.right() - 24.dip },
+      y = bottomTo { parent.bottom() - 24.dip }
+    )
+
+    notesList.adapter = ConcatAdapter(folderAdapter, noteAdapter)
+    notesList.layoutManager = object : LinearLayoutManager(context) {
+      override fun calculateExtraLayoutSpace(state: State, extraLayoutSpace: IntArray) {
+        super.calculateExtraLayoutSpace(state, extraLayoutSpace)
+        // When this screen gets resized by the keyboard, we wanna continue showing items in the space covered
+        // by the keyboard. This way all the notes stay visible when the editor screen is dragged for a note
+        // item that's covered by the keyboard.
+        extraLayoutSpace[1] = maxOf(keyboardHeight() ?: 0, extraLayoutSpace[1])
+      }
+    }
   }
 
   override fun onAttachedToWindow() {
     super.onAttachedToWindow()
 
-    val newNoteClicks = newNoteFab
-        .clicks()
-        .map<HomeEvent> { NewNoteClicked }
-
-    val presenter = presenter.create(Args(includeEmptyNotes = false))
-
-    newNoteClicks.uiUpdates(presenter)
-        // These two suspend calls skip updates while an
-        // existing note or the new-note screen is open.
-        .suspendWhileExpanded(noteEditorPage)
-        .suspendWhile(windowFocusChanges) { it.hasFocus.not() }
-        .takeUntil(detaches())
-        .observeOn(mainThread())
-        .subscribe(models = ::render, effects = ::render)
-  }
-
-  override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
-    super.onWindowFocusChanged(hasWindowFocus)
-    windowFocusChanges.onNext(WindowFocusChanged(hasWindowFocus))
-  }
-
-  override fun onSaveInstanceState(): Parcelable? {
-    return HomeViewSavedState(
-        superState = super.onSaveInstanceState(),
-        activeNote = activeNote
+    val presenter = presenter.create(
+      Args(
+        screenKey = screenKey(),
+        includeBlankNotes = false,
+        navigator = navigator()
+      )
     )
+
+    presenter.models()
+      .takeUntil(detaches())
+      .observeOn(mainThread())
+      .subscribe(::render)
+
+    newNoteFab.setOnClickListener {
+      toolbar.setSearchVisible(false, withKeyboard = false)
+      presenter.dispatch(NewNoteClicked)
+    }
+    toolbar.searchField.doOnTextChange {
+      notesList.scrollToPosition(0)
+      presenter.dispatch(SearchTextChanged(text = it.toString()))
+    }
+
+    Observable.merge(noteAdapter.clicks, folderAdapter.clicks)
+      .throttleFirst(1.second, mainThread())
+      .takeUntil(detaches())
+      .subscribe { row ->
+        if (toolbar.isSearchVisible()) {
+          hideKeyboard()
+        }
+        navigator().lfg(row.screenKey())
+      }
   }
 
-  override fun onRestoreInstanceState(state: Parcelable?) {
-    require(state is HomeViewSavedState)
-
-    // InboxRecyclerView is capable of restoring its own state. We
-    // only need to ensure that the EditorView is ready to be shown.
-    activeNote = state.activeNote
-
-    super.onRestoreInstanceState(state.superState)
-  }
-
-  private fun setupNoteEditorPage() {
-    noteAdapter.noteClicks
-        .throttleFirst(1.second, mainThread())
-        .takeUntil(detaches())
-        .subscribe { note ->
-          activeNote = note.toActiveNote()
-          noteEditorPage.post {
-            notesList.expandItem(itemId = note.adapterId)
+  override fun createScreenExpander(): InboxItemExpander<ScreenKey> {
+    return InboxItemExpander { screen, viewHolders ->
+      when (screen) {
+        is EditorScreenKey -> {
+          (screen.openMode as? ExistingNote)?.let { mode ->
+            noteAdapter.viewHolderFor(mode.noteId.id, viewHolders)
           }
         }
-
-    noteEditorPage.doOnNextCollapse {
-      activeNote = null
-    }
-
-    noteEditorPage.doOnNextAboutToCollapse { collapseAnimDuration ->
-      postDelayed(collapseAnimDuration / 2) {
-        hideKeyboard()
+        is HomeScreenKey -> {
+          screen.folder?.let { folder ->
+            folderAdapter.viewHolderFor(folder, viewHolders)
+          }
+        }
+        else -> null
       }
     }
-
-    noteEditorPage.addStateChangeCallbacks(
-        ToggleFabOnPageStateChange(newNoteFab),
-        ToggleSoftInputModeOnPageStateChange(activity.window)
-    )
   }
 
-  private fun render(model: HomeUiModel) {
-    noteAdapter.submitList(model.notes)
-  }
-
-  private fun render(effect: HomeUiEffect) {
-    when (effect) {
-      ComposeNewNote -> openNewNoteScreen()
-    }.exhaustive
-  }
-
-  private fun openNewNoteScreen() {
-    val (intent, options) = EditorActivity.intentWithFabTransform(
-        activity = activity,
-        fab = newNoteFab,
-        fabIconRes = R.drawable.ic_note_add_24dp
-    )
-    ContextCompat.startActivity(context, intent, options.toBundle())
-  }
-
-  fun offerBackPress(): BackPressInterceptResult {
-    return if (noteEditorPage.isExpandedOrExpanding) {
-      activeNote = null
-      BACK_PRESS_INTERCEPTED
+  override fun onScreenFocusChanged(focusedScreen: ScreenKey?) {
+    if (focusedScreen is EditorScreenKey && focusedScreen.openMode is ExistingNote) {
+      // Hide the FAB only if an existing note is being opened.
+      // If it's a new note, the FAB will morph into the new screen.
+      newNoteFab.hide()
     } else {
-      BACK_PRESS_IGNORED
+      newNoteFab.show()
+    }
+
+    if (screenKey == focusedScreen && toolbar.isSearchVisible()) {
+      toolbar.searchField.requestFocus()
     }
   }
 
-  @AssistedInject.Factory
-  interface Factory {
-    fun withContext(context: Context): HomeView
+  override fun onInterceptBackPress(): InterceptResult {
+    return if (toolbar.isSearchVisible()) {
+      toolbar.setSearchVisible(false)
+      InterceptResult.Intercepted
+    } else {
+      InterceptResult.Ignored
+    }
+  }
+
+  private fun render(model: HomeModel) {
+    toolbar.render(model)
+    noteAdapter.submitList(model.notes)
+    folderAdapter.submitList(model.folders)
+
+    TransitionManager.beginDelayedTransition(this, Fade().addTarget(emptyStateView))
+    emptyStateView.isVisible = model.emptyState != null
+    emptyStateView.render(model.emptyState)
   }
 }

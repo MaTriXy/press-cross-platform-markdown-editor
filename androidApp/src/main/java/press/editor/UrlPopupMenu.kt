@@ -7,7 +7,7 @@ import android.view.View
 import androidx.appcompat.view.menu.MenuPopupHelper
 import androidx.appcompat.widget.PopupMenu
 import me.saket.press.shared.localization.strings
-import press.util.reflect
+import press.extensions.reflect
 
 class UrlPopupMenu(
   context: Context,
@@ -16,8 +16,8 @@ class UrlPopupMenu(
 ) : PopupMenu(context, anchor) {
 
   init {
-    val openString = context.strings().editor.openUrl
-    val editString = context.strings().editor.editUrl
+    val openString = context.strings().editor.open_url
+    val editString = context.strings().editor.edit_url
 
     menu.add(openString)
     menu.add(editString)
@@ -31,8 +31,13 @@ class UrlPopupMenu(
   }
 
   fun showAt(location: Point) {
-    val popupHelper = reflect<PopupMenu>().field("mPopup").get(this) as MenuPopupHelper
+    val popupHelper = reflect<PopupMenu>().field("mPopup")?.get(this) as? MenuPopupHelper
     val tryShowMethod = reflect<MenuPopupHelper>().method("tryShow", Int::class.java, Int::class.java)
-    tryShowMethod.invoke(popupHelper, location.x, location.y)
+
+    if (popupHelper != null && tryShowMethod != null) {
+      tryShowMethod.invoke(popupHelper, location.x, location.y)
+    } else {
+      show()
+    }
   }
 }

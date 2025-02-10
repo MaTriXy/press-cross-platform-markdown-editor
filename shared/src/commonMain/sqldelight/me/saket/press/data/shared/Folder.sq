@@ -1,0 +1,56 @@
+import me.saket.press.shared.db.FolderId;
+
+-- todo: add name+parent as a primary key.
+CREATE TABLE folder (
+  id TEXT AS FolderId NOT NULL,
+  name TEXT NOT NULL,
+  parent TEXT AS FolderId
+);
+
+-- Makes it easy to find archived notes.
+-- https://www.db-fiddle.com/f/b6Ms5mzMwL3YWY2N2RmQoD/1
+-- https://haughtcodeworks.com/blog/software-development/recursive-sql-queries-using-ctes/
+CREATE VIEW folders_with_roots AS
+WITH RECURSIVE cte_folder (id, name, parent, root_name, root_id) AS (
+  SELECT id, name, parent, name AS root_name, id AS root_id
+  FROM folder
+  WHERE folder.parent IS NULL
+
+  UNION
+
+  SELECT folder.id, folder.name, folder.parent, cte_folder.root_name, cte_folder.root_id
+  FROM folder, cte_folder
+  WHERE folder.parent = cte_folder.id
+)
+SELECT id, root_name, root_id FROM cte_folder;
+
+insert:
+INSERT INTO folder(id, name, parent)
+VALUES (?, ?, ?);
+
+folder:
+SELECT * FROM folder
+WHERE id = ?;
+
+allFolders:
+SELECT * FROM folder
+ORDER BY name ASC;
+
+foldersUnder:
+SELECT * FROM folder
+WHERE parent = ?
+ORDER BY name ASC;
+
+nonEmptyFoldersUnder:
+SELECT id, name FROM folder
+WHERE parent = ? AND id IN (
+  SELECT folderId
+  FROM visibleNonEmptyNotes
+  WHERE folderId IS NOT NULL
+)
+ORDER BY name ASC;
+
+-- Test functions.
+testInsert:
+INSERT INTO folder
+VALUES ?;

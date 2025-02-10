@@ -1,0 +1,29 @@
+import com.soywiz.klock.DateTime;
+import me.saket.press.shared.note.NoteFolder;
+import me.saket.press.shared.syncer.git.GitRemoteAndAuth;
+
+CREATE TABLE folderSyncConfig (
+  remote TEXT AS GitRemoteAndAuth NOT NULL,
+  lastSyncedAt TEXT AS DateTime,
+  lastPushedSha1 TEXT,
+  backupDone INTEGER AS Boolean NOT NULL DEFAULT 0
+);
+
+save {
+  DELETE FROM folderSyncConfig;
+  INSERT INTO folderSyncConfig VALUES (:remote, NULL, NULL, 0);
+}
+
+select:
+SELECT * FROM folderSyncConfig;
+
+update:
+UPDATE folderSyncConfig
+SET lastPushedSha1 = ?, lastSyncedAt = ?;
+
+setBackupDone:
+UPDATE folderSyncConfig
+SET backupDone = ?;
+
+delete:
+DELETE FROM folderSyncConfig;

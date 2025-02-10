@@ -1,5 +1,12 @@
 package me.saket.press.shared
 
-// Unused on iOS.
-actual abstract class Runner
-actual class AndroidJUnit4 : Runner()
+import kotlinx.coroutines.CoroutineScope
+import me.saket.press.shared.sync.git.DeviceInfo
+
+actual fun testDeviceInfo(): DeviceInfo = TODO()
+
+actual fun <T> runBlocking(block: suspend CoroutineScope.() -> T): T {
+  return kotlinx.coroutines.runBlocking {
+    block(this)
+  }
+}

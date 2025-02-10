@@ -2,15 +2,16 @@ apply plugin: 'com.android.application'
 apply plugin: 'kotlin-android'
 apply plugin: 'kotlin-android-extensions'
 apply plugin: 'kotlin-kapt'
+apply plugin: 'app.cash.exhaustive'
 
 android {
-  compileSdkVersion projectVersions.compileSdk
+  compileSdkVersion versions.compileSdk
   defaultConfig {
     applicationId "me.saket.press"
-    minSdkVersion projectVersions.minSdk
-    targetSdkVersion projectVersions.compileSdk
-    versionCode 7
-    versionName "1.5"
+    minSdkVersion versions.minSdk
+    targetSdkVersion versions.compileSdk
+    versionCode 13
+    versionName "1.9.0"
     testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     archivesBaseName = "press_v${versionName}_(${versionCode})"
   }
@@ -36,17 +37,39 @@ android {
     sourceCompatibility JavaVersion.VERSION_1_8
     targetCompatibility JavaVersion.VERSION_1_8
   }
+
+  packagingOptions {
+    exclude 'META-INF/*'
+    exclude 'plugin.properties'
+  }
+
+  testOptions {
+    unitTests {
+      includeAndroidResources = true
+    }
+  }
+}
+
+tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).all {
+  kotlinOptions {
+    // To suppress "Class ... is compiled by a pre-release version
+    // of Kotlin and cannot be loaded by this version of the compiler".
+    freeCompilerArgs += "-Xskip-prerelease-check"
+  }
 }
 
 dependencies {
   implementation project(':wysiwyg')
   implementation project(':shared')
-  implementation project(':resourceinterceptor')
 
-  implementation deps.kotlin.stdlib.jdk8
+  implementation deps.androidx.core
   implementation deps.androidx.appCompat
   implementation deps.androidx.recyclerView
+  implementation deps.androidx.browser
   implementation deps.androidx.ktx
+  implementation deps.androidx.workManager.core
+  implementation deps.androidx.workManager.rx2
+  implementation deps.androidx.lifecycle.process
   implementation deps.material.core
 
   implementation deps.contour
@@ -55,25 +78,33 @@ dependencies {
   implementation deps.rx2.android
   implementation deps.rx2.binding
   implementation deps.rx2.kotlin
+  implementation deps.rx2.replayingShare
+  implementation deps.rx2.replayingShareKotlin
   implementation deps.dagger.runtime
-  implementation deps.assistedInject.annotations
+  implementation deps.dagger.assistedInject.annotations
+  implementation deps.dagger.inflationInject.core
   kapt deps.dagger.compiler
-  kapt deps.assistedInject.processor
+  kapt deps.dagger.assistedInject.processor
+  kapt deps.dagger.inflationInject.processor
   implementation deps.multiplatformUuid
   implementation deps.inboxRecyclerView
   implementation deps.klock.android
   implementation deps.itemAnimators
   implementation deps.betterLinkMovementMethod
+  implementation deps.cascade
+  implementation deps.flow
 
   debugImplementation deps.flipper.debug.core
   debugImplementation deps.flipper.debug.soLoader
   releaseImplementation deps.flipper.release.core
-
-  testImplementation deps.junit
 
   androidTestImplementation deps.androidx.test.core
   androidTestImplementation deps.androidx.test.runner
   androidTestImplementation deps.androidx.test.jUnit
   androidTestImplementation deps.androidx.test.jUnitKtx
   androidTestImplementation deps.truth
+
+  // Shouldn't be using reaktive directly from platform code, but this is temporary.
+  androidTestImplementation deps.reaktive.core.common
+  androidTestImplementation deps.reaktive.interop.rxJava2
 }

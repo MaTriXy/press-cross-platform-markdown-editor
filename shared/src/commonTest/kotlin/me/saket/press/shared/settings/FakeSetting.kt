@@ -1,13 +1,15 @@
 package me.saket.press.shared.settings
 
-import me.saket.press.shared.util.FreezableAtomicReference
+import com.badoo.reaktive.subject.behavior.BehaviorSubject
+import me.saket.press.shared.preferences.Setting
 
-data class FakeSetting<T>(val defaultValue: T) : Setting<T> {
-  private val reference = FreezableAtomicReference(defaultValue)
+data class FakeSetting<T : Any>(private val defaultValue: T?) : Setting<T>() {
+  private val value = BehaviorSubject(defaultValue)
 
-  override fun get(): T = reference.value
+  override fun get(): T? = value.value
+  override fun listen() = value
 
-  override fun set(value: T) {
-    this.reference.value = value
+  override fun set(value: T?) {
+    this.value.onNext(value)
   }
 }

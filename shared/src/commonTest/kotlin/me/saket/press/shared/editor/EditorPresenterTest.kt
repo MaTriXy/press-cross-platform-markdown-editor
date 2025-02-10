@@ -1,187 +1,395 @@
 package me.saket.press.shared.editor
 
 import assertk.assertThat
+import assertk.assertions.contains
+import assertk.assertions.doesNotContain
 import assertk.assertions.hasSize
+import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
-import assertk.assertions.isNotNull
-import com.badoo.reaktive.subject.publish.publishSubject
+import assertk.assertions.isFalse
+import assertk.assertions.isNull
+import assertk.assertions.isTrue
+import com.badoo.reaktive.observable.map
 import com.badoo.reaktive.test.base.assertNotError
-import com.badoo.reaktive.test.observable.assertValue
 import com.badoo.reaktive.test.observable.test
 import com.badoo.reaktive.test.scheduler.TestScheduler
-import com.benasher44.uuid.uuid4
+import com.soywiz.klock.TimeSpan
 import com.soywiz.klock.seconds
+import me.saket.press.shared.FakeSchedulers
+import me.saket.press.shared.IsoStack
+import me.saket.press.shared.db.BaseDatabaeTest
+import me.saket.press.shared.db.NoteId
+import me.saket.press.shared.editor.EditorEvent.ArchiveToggleClicked
+import me.saket.press.shared.editor.EditorEvent.CloseSubMenu
+import me.saket.press.shared.editor.EditorEvent.DeleteNoteClicked
 import me.saket.press.shared.editor.EditorEvent.NoteTextChanged
 import me.saket.press.shared.editor.EditorOpenMode.ExistingNote
 import me.saket.press.shared.editor.EditorOpenMode.NewNote
 import me.saket.press.shared.editor.EditorPresenter.Args
 import me.saket.press.shared.editor.EditorPresenter.Companion.NEW_NOTE_PLACEHOLDER
-import me.saket.press.shared.editor.EditorUiEffect.UpdateNoteText
-import me.saket.press.shared.fakedata.fakeNote
-import me.saket.press.shared.localization.Strings
-import me.saket.press.shared.note.FakeNoteRepository
+import me.saket.press.shared.editor.EditorEffect.BlockedDueToSyncConflict
+import me.saket.press.shared.editor.EditorEffect.PopulateNoteBody
+import me.saket.press.shared.editor.ToolbarIconKind.Archive
+import me.saket.press.shared.editor.ToolbarIconKind.DeleteNote
+import me.saket.press.shared.editor.ToolbarIconKind.Unarchive
+import me.saket.press.shared.fakeNote
+import me.saket.press.shared.fakeGitRepository
+import me.saket.press.shared.localization.ENGLISH_STRINGS
+import me.saket.press.shared.rx.RxRule
+import me.saket.press.shared.rx.test
+import me.saket.press.shared.syncer.FakeSyncer
+import me.saket.press.shared.syncer.SyncMergeConflicts
+import me.saket.press.shared.syncer.SyncState.IN_FLIGHT
+import me.saket.press.shared.syncer.Syncer.Status
+import me.saket.press.shared.syncer.Syncer.Status.LastOp.Idle
+import me.saket.press.shared.syncer.git.DelegatingPressDatabase
+import me.saket.press.shared.syncer.git.FolderPaths
+import me.saket.press.shared.testDeviceInfo
+import me.saket.press.shared.time.FakeClock
+import me.saket.press.shared.ui.FakeClipboard
+import me.saket.press.shared.ui.FakeNavigator
 import me.saket.wysiwyg.formatting.TextSelection
+import me.saket.wysiwyg.parser.MarkdownParser
+import kotlin.test.AfterTest
 import kotlin.test.Test
-import kotlin.test.assertEquals
-import kotlin.test.assertTrue
 
-class EditorPresenterTest {
+class EditorPresenterTest : BaseDatabaeTest() {
+  override val database = DelegatingPressDatabase(super.database)
+  private val noteQueries get() = database.noteQueries
+  private val folderPaths = FolderPaths(database)
+  private val rxRule = RxRule()
 
-  private val noteUuid = uuid4()
-  private val repository = FakeNoteRepository()
+  private val noteId = NoteId.generate()
   private val testScheduler = TestScheduler()
   private val config = EditorConfig(autoSaveEvery = 5.seconds)
-  private val strings = Strings.Editor(
-      newNoteHints = listOf("New note heading hint #1", "New note heading hint #2"),
-      openUrl = "Open",
-      editUrl = "Edit"
-  )
+  private val navigator = FakeNavigator()
+  private val syncConflicts = SyncMergeConflicts()
+  private val syncer = FakeSyncer()
 
-  private val events = publishSubject<EditorEvent>()
+  private val uiEffects = IsoStack<EditorEffect>()
 
-  private fun presenter(openMode: EditorOpenMode): EditorPresenter {
+  private fun presenter(
+    openMode: EditorOpenMode,
+    deleteBlankNoteOnExit: Boolean = true
+  ): EditorPresenter {
     return EditorPresenter(
-        args = Args(openMode),
-        noteRepository = repository,
-        ioScheduler = TestScheduler(),
-        computationScheduler = testScheduler,
-        strings = strings,
-        config = config
+      args = Args(
+        openMode = openMode,
+        deleteBlankNewNoteOnExit = deleteBlankNoteOnExit,
+        navigator = navigator,
+        onEffect = { uiEffects.push(it) }
+      ),
+      database = database,
+      clock = FakeClock(),
+      schedulers = FakeSchedulers(computation = testScheduler),
+      strings = ENGLISH_STRINGS,
+      config = config,
+      syncConflicts = syncConflicts,
+      markdownParser = MarkdownParser(),
+      clipboard = FakeClipboard(),
+      deviceInfo = testDeviceInfo(),
+      syncer = syncer
     )
+  }
+
+  @AfterTest
+  fun finish() {
+    rxRule.assertEmpty()
   }
 
   @Test fun `blank note is created on start when a new note is opened`() {
-    assertThat(repository.savedNotes).hasSize(0)
+    assertThat(noteQueries.allNotes().executeAsList()).hasSize(0)
 
-    val observer = presenter(NewNote(noteUuid))
-        .uiModels(events)
-        .test()
+    presenter(NewNote(noteId))
+      .models()
+      .test(rxRule)
 
-    repository.savedNotes.single().let {
-      assertThat(it.uuid).isEqualTo(noteUuid)
+    noteQueries.allNotes().executeAsOne().let {
+      assertThat(it.id).isEqualTo(noteId)
       assertThat(it.content).isEqualTo(NEW_NOTE_PLACEHOLDER)
     }
-    observer.assertNotError()
   }
 
   @Test fun `auto-save note at regular intervals`() {
-    repository.savedNotes += fakeNote(
-        uuid = noteUuid,
-        content = "# "
-    )
+    noteQueries.testInsert(fakeNote("# ", id = noteId))
 
-    val observer = presenter(NewNote(noteUuid))
-        .uiModels(events)
-        .test()
+    val presenter = presenter(NewNote(noteId))
+    val models = presenter.models().test(rxRule)
 
-    val savedNote = { repository.savedNotes.single { it.uuid == noteUuid } }
+    val savedNote = { noteQueries.allNotes().executeAsOne() }
 
-    events.onNext(NoteTextChanged("# Ghost Rider"))
-    testScheduler.timer.advanceBy(config.autoSaveEvery.millisecondsLong)
+    presenter.dispatch(NoteTextChanged("# Ghost Rider"))
+    testScheduler.timer.advanceBy(config.autoSaveEvery)
     assertThat(savedNote().content).isEqualTo("# Ghost Rider")
 
-    events.onNext(NoteTextChanged("# Ghost"))
-    testScheduler.timer.advanceBy(config.autoSaveEvery.millisecondsLong)
+    presenter.dispatch(NoteTextChanged("# Ghost"))
+    testScheduler.timer.advanceBy(config.autoSaveEvery)
     assertThat(savedNote().content).isEqualTo("# Ghost")
 
-    events.onNext(NoteTextChanged("# Ghost"))
-    testScheduler.timer.advanceBy(config.autoSaveEvery.millisecondsLong)
-    assertThat(repository.updateCount).isEqualTo(2)
+    presenter.dispatch(NoteTextChanged("# Ghost"))
+    testScheduler.timer.advanceBy(config.autoSaveEvery)
+    assertThat(noteQueries.updateCount).isEqualTo(2)
 
-    observer.assertNotError()
+    models.popAllValues()
   }
 
   @Test fun `blank note is not created on start when an existing note is opened`() {
-    repository.savedNotes += fakeNote(uuid = noteUuid, content = "Nicolas")
+    noteQueries.testInsert(fakeNote("Nicolas", id = noteId))
 
-    val observer = presenter(ExistingNote(noteUuid))
-        .uiModels(events)
-        .test()
+    presenter(ExistingNote(ExistingNoteId(noteId)))
+      .models()
+      .test(rxRule)
 
-    repository.savedNotes.single().let {
-      assertThat(it.uuid).isEqualTo(noteUuid)
+    noteQueries.allNotes().executeAsOne().let {
+      assertThat(it.id).isEqualTo(noteId)
       assertThat(it.content).isEqualTo("Nicolas")
     }
-    observer.assertNotError()
   }
 
-  @Test fun `updating an existing note on exit when its content is non-blank`() {
-    repository.savedNotes += fakeNote(
-        uuid = noteUuid,
-        content = "Existing note"
-    )
+  @Test fun `updating an existing note on close when its content is non-blank`() {
+    noteQueries.testInsert(fakeNote("Existing note", id = noteId))
 
-    val presenter = presenter(NewNote(noteUuid))
-    presenter.saveEditorContentOnExit("Updated note")
+    presenter(NewNote(noteId))
+      .saveEditorContentOnClose("Updated note")
+      .test(rxRule)
+      .assertComplete()
 
-    val savedNote = repository.savedNotes.last()
-    assertEquals("Updated note", savedNote.content)
+    val savedNote = noteQueries.allNotes().executeAsOne()
+    assertThat(savedNote.content).isEqualTo("Updated note")
   }
 
-  @Test fun `deleting an existing note on exit when its content is blank`() {
-    repository.savedNotes += fakeNote(
-        uuid = noteUuid,
-        content = "Existing note"
+  @Test fun `delete new blank notes on close when enabled`() {
+    val presenter = presenter(
+      openMode = NewNote(PlaceholderNoteId(NoteId.generate()), preFilledNote = "# Nicolas Cage"),
+      deleteBlankNoteOnExit = true
     )
+    presenter.models().test()
 
-    val presenter = presenter(NewNote(noteUuid))
-    presenter.saveEditorContentOnExit("  \n ")
-    presenter.saveEditorContentOnExit("  ")
-    presenter.saveEditorContentOnExit("")
+    presenter.dispatch(NoteTextChanged("# Nicolas Cage"))
+    testScheduler.timer.advanceBy(config.autoSaveEvery)
 
-    val deletedNote = repository.savedNotes.last()
-    assertThat(deletedNote.deletedAtString).isNotNull()
+    val savedNote = { noteQueries.allNotes().executeAsOne() }
+    assertThat(savedNote().content).isEqualTo("# Nicolas Cage")
+
+    presenter.saveEditorContentOnClose("").test(rxRule).assertComplete()
+    presenter.saveEditorContentOnClose("  ").test(rxRule).assertComplete()
+    presenter.saveEditorContentOnClose("  \n ").test(rxRule).assertComplete()
+    assertThat(savedNote().content).isEqualTo("  \n ")
+    assertThat(savedNote().isPendingDeletion).isTrue()
+  }
+
+  @Test fun `deletion of note shouldn't cause any error`() {
+    val note = fakeNote("# The")
+    noteQueries.testInsert(note)
+
+    val presenter = presenter(ExistingNote(ExistingNoteId(note.id)))
+    val models = presenter.models().test(rxRule)
+
+    noteQueries.run {
+      markAsPendingDeletion(note.id)
+      updateSyncState(ids = listOf(note.id), syncState = IN_FLIGHT)
+      deleteNote(note.id)
+    }
+
+    presenter.dispatch(NoteTextChanged("# The Witcher"))
+    testScheduler.timer.advanceBy(config.autoSaveEvery)
+    models.assertAnyValue()
+
+    presenter.saveEditorContentOnClose("# The Witcher 3").test(rxRule)
+
+    assertThat(noteQueries.allNotes().executeAsList()).isEmpty()
+  }
+
+  @Test fun `avoid deleting new blank note on close when disabled`() {
+    val presenter = presenter(
+      openMode = NewNote(ExistingNoteId(noteId), preFilledNote = "# Nicolas Cage"),
+      deleteBlankNoteOnExit = false
+    )
+    presenter.models().test()
+
+    presenter.dispatch(NoteTextChanged("# Nicolas Cage"))
+    testScheduler.timer.advanceBy(config.autoSaveEvery)
+    val savedNote = { noteQueries.allNotes().executeAsOne() }
+    assertThat(savedNote().content).isEqualTo("# Nicolas Cage")
+
+    presenter.saveEditorContentOnClose("").test(rxRule).assertComplete()
+    assertThat(savedNote().content).isEqualTo("")
+    assertThat(savedNote().isPendingDeletion).isFalse()
+  }
+
+  @Test fun `avoid deleting existing blank note on close when enabled`() {
+    noteQueries.testInsert(fakeNote("Existing note", id = noteId))
+
+    val presenter = presenter(ExistingNote(ExistingNoteId(noteId)), deleteBlankNoteOnExit = true)
+    presenter.saveEditorContentOnClose("").test(rxRule).assertComplete()
+    presenter.saveEditorContentOnClose("  ").test(rxRule).assertComplete()
+    presenter.saveEditorContentOnClose("  \n ").test(rxRule).assertComplete()
+
+    noteQueries.allNotes().executeAsOne().let {
+      assertThat(it.content).isEqualTo("  \n ")
+      assertThat(it.isPendingDeletion).isFalse()
+    }
   }
 
   @Test fun `show hint text until the text is changed`() {
-    val uiModels = presenter(NewNote(noteUuid))
-        .uiModels(events)
-        .test()
+    val presenter = presenter(NewNote(noteId))
+    val uiModels = presenter
+      .models()
+      .test()
 
-    events.onNext(NoteTextChanged(NEW_NOTE_PLACEHOLDER))
-    events.onNext(NoteTextChanged(""))
-    events.onNext(NoteTextChanged(NEW_NOTE_PLACEHOLDER))
-    events.onNext(NoteTextChanged("  $NEW_NOTE_PLACEHOLDER"))
-    events.onNext(NoteTextChanged("$NEW_NOTE_PLACEHOLDER  "))
+    val hintText = { uiModels.values.last().hintText?.drop("# ".length) }
 
-    val randomlySelectedHint = uiModels.values[0].hintText
+    presenter.dispatch(NoteTextChanged(NEW_NOTE_PLACEHOLDER))
+    assertThat(ENGLISH_STRINGS.editor.new_note_hints).contains(hintText())
 
-    assertTrue(randomlySelectedHint in strings.newNoteHints)
-    assertEquals(null, uiModels.values[1].hintText)
-    assertEquals(randomlySelectedHint, uiModels.values[2].hintText)
-    assertEquals(null, uiModels.values[3].hintText)
-    assertEquals(randomlySelectedHint, uiModels.values[4].hintText)
+    presenter.dispatch(NoteTextChanged(""))
+    assertThat(hintText()).isNull()
+
+    presenter.dispatch(NoteTextChanged(NEW_NOTE_PLACEHOLDER))
+    assertThat(ENGLISH_STRINGS.editor.new_note_hints).contains(hintText())
+
+    presenter.dispatch(NoteTextChanged("  $NEW_NOTE_PLACEHOLDER"))
+    assertThat(hintText()).isNull()
+
+    presenter.dispatch(NoteTextChanged("$NEW_NOTE_PLACEHOLDER  "))
+    assertThat(ENGLISH_STRINGS.editor.new_note_hints).contains(hintText())
 
     uiModels.assertNotError()
   }
 
   @Test fun `populate existing note's content on start`() {
-    repository.savedNotes += fakeNote(
-        uuid = noteUuid,
-        content = "Nicolas Cage favorite dialogues"
+    noteQueries.testInsert(fakeNote("Nicolas Cage favorite dialogues", id = noteId))
+
+    presenter(ExistingNote(ExistingNoteId(noteId)))
+      .models()
+      .test()
+
+    assertThat(uiEffects.pop()).isEqualTo(
+      PopulateNoteBody("Nicolas Cage favorite dialogues", newSelection = null)
+    )
+  }
+
+  @Test fun `populate new note's content with placeholder on start`() {
+    presenter(NewNote(PlaceholderNoteId(noteId), preFilledNote = "   "))
+      .models()
+      .test()
+
+    assertThat(uiEffects.pop()).isEqualTo(
+      PopulateNoteBody(
+        newText = NEW_NOTE_PLACEHOLDER,
+        newSelection = TextSelection.cursor(NEW_NOTE_PLACEHOLDER.length)
+      )
+    )
+  }
+
+  @Test fun `populate new note's content with pre-filled note on start`() {
+    presenter(NewNote(PlaceholderNoteId(noteId), "Hello, World!"))
+      .models()
+      .test()
+
+    assertThat(uiEffects.pop()).isEqualTo(
+      PopulateNoteBody(newText = "Hello, World!", newSelection = null)
+    )
+  }
+
+  @Test fun `block editing if note is marked as sync-conflicted`() {
+    noteQueries.testInsert(fakeNote("# Existing note", id = noteId))
+
+    presenter(ExistingNote(ExistingNoteId(noteId)))
+      .models()
+      .test()
+
+    syncConflicts.add(noteId)
+    assertThat(uiEffects.pop()).isEqualTo(BlockedDueToSyncConflict)
+  }
+
+  @Test fun `stop updating saved note once note is marked as sync-conflicted`() {
+    noteQueries.testInsert(fakeNote("# Content before sync", id = noteId))
+
+    val presenter = presenter(ExistingNote(ExistingNoteId(noteId)))
+    presenter.models().test()
+    syncConflicts.add(noteId)
+
+    presenter.dispatch(NoteTextChanged("# Updated note"))
+    presenter.saveEditorContentOnClose("# Exitingggggg").test(rxRule)
+
+    val savedNote = noteQueries.allNotes().executeAsOne()
+    assertThat(savedNote.content).isEqualTo("# Content before sync")
+  }
+
+  @Test fun `archive menu item`() {
+    noteQueries.testInsert(
+      fakeNote("# Existing note", id = noteId, folderId = null)
     )
 
-    presenter(ExistingNote(noteUuid))
-        .uiEffects(events)
-        .test()
-        .apply {
-          assertValue(UpdateNoteText("Nicolas Cage favorite dialogues", newSelection = null))
-          assertNotError()
-        }
+    val presenter = presenter(ExistingNote(ExistingNoteId(noteId)))
+    presenter.dispatch(NoteTextChanged(""))
+
+    val models = presenter.models()
+      .map { it.toolbarMenu }
+      .test(rxRule)
+
+    assertThat(models.popValue()).contains(
+      ToolbarMenuAction(
+        label = "Archive",
+        icon = Archive,
+        clickEvent = ArchiveToggleClicked(archive = true)
+      )
+    )
+
+    folderPaths.setArchived(noteId, archive = true)
+    assertThat(models.popValue()).contains(
+      ToolbarMenuAction(
+        label = "Unarchive",
+        icon = Unarchive,
+        clickEvent = ArchiveToggleClicked(archive = false)
+      )
+    )
   }
 
-  @Test fun `populate new note's content on start`() {
-    presenter(NewNote(noteUuid))
-        .uiEffects(events)
-        .test()
-        .apply {
-          assertValue(
-              UpdateNoteText(
-                  newText = NEW_NOTE_PLACEHOLDER,
-                  newSelection = TextSelection.cursor(NEW_NOTE_PLACEHOLDER.length)
-              )
-          )
-          assertNotError()
-        }
+  @Test fun `show delete menu item only if sync is enabled`() {
+    noteQueries.testInsert(fakeNote("# Witcher 3", id = noteId))
+
+    val presenter = presenter(ExistingNote(ExistingNoteId(noteId)))
+    presenter.dispatch(NoteTextChanged(""))
+
+    val models = presenter.models()
+      .map { it.toolbarMenu }
+      .test(rxRule)
+
+    val deleteMenuItem = ToolbarSubMenu(
+      label = ENGLISH_STRINGS.editor.menu_delete_note,
+      subMenuTitle = ENGLISH_STRINGS.editor.menu_delete_note_confirmation_title,
+      icon = DeleteNote,
+      children = listOf(
+        ToolbarMenuAction(
+          label = ENGLISH_STRINGS.editor.menu_delete_note_confirm,
+          isDangerousAction = true,
+          clickEvent = DeleteNoteClicked,
+        ),
+        ToolbarMenuAction(
+          label = ENGLISH_STRINGS.editor.menu_delete_note_cancel,
+          clickEvent = CloseSubMenu,
+        )
+      )
+    )
+    syncer.status.onNext(Status.Disabled)
+    assertThat(models.popValue()).doesNotContain(deleteMenuItem)
+
+    syncer.status.onNext(
+      Status.Enabled(
+        lastOp = Idle,
+        syncingWith = fakeGitRepository(),
+        lastSyncedAt = null
+      )
+    )
+    assertThat(models.popValue()).contains(deleteMenuItem)
   }
+}
+
+@Suppress("TestFunctionName")
+private fun NewNote(id: NoteId) = NewNote(PlaceholderNoteId(id), preFilledNote = null)
+
+private fun TestScheduler.Timer.advanceBy(timeSpan: TimeSpan) {
+  advanceBy(timeSpan.millisecondsLong)
 }

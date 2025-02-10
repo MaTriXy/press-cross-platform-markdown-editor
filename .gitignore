@@ -38,25 +38,18 @@ captures/
 *.iml
 .gradle
 /local.properties
-/.idea/caches
-/.idea/libraries
-/.idea/sqldelight
-/.idea/modules.xml
-/.idea/workspace.xml
-/.idea/navEditor.xml
-/.idea/assetWizardSettings.xml
-/.idea/encodings.xml
-/.idea/misc.xml
-/.idea/gradle.xml
-/.idea/vcs.xml
-/.idea/$PRODUCT_WORKSPACE_FILE$
 .DS_Store
 /build
 /captures
 .externalNativeBuild
 .cxx
 
-# Keystore files
+/.idea/*
+!/.idea/codeStyles
+!/.idea/dictionaries
+
+# Secrets
+/shared/secrets.properties
 *.jks
 
 # Eclipse project files
